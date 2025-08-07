@@ -7,126 +7,283 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import numpy as np
 import logging
 import os
 from pathlib import Path
+from typing import Dict, List, Tuple
+import json
+import time
+from tqdm import tqdm
 
 from data_loader import load_environment_data, create_dataloaders
-from model import create_model
-from argument_parser import parse_training_args
+from model import TrafficPredictor
+from environment import Environment
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-def train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader, 
-                config: dict, device: torch.device, model_name: str):
-    """Train a model."""
-    logger.info(f"Training {model_name} model")
+class MSELoss(nn.Module):
+    """Custom MSE loss that handles missing values."""
     
-    # Loss function and optimizer
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
+    def __init__(self, reduction: str = 'mean'):
+        super().__init__()
+        self.reduction = reduction
     
-    # Training loop
-    for epoch in range(config['num_epochs']):
-        model.train()
-        train_loss = 0.0
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Compute MSE loss, ignoring zero-padded values.
         
-        for batch_idx, (inputs, neighbors, targets, target_neighbors) in enumerate(train_loader):
-            inputs = inputs.to(device)
-            neighbors = neighbors.to(device)
-            targets = targets.to(device)
-            target_neighbors = target_neighbors.to(device)
-            
-            # Forward pass
-            optimizer.zero_grad()
-            outputs = model(inputs, neighbors)
-            loss = criterion(outputs, targets)
-            
-            # Backward pass
-            loss.backward()
-            optimizer.step()
-            
-            train_loss += loss.item()
-            
-            if batch_idx % 100 == 0:
-                logger.info(f"Epoch {epoch+1}/{config['num_epochs']}, "
-                          f"Batch {batch_idx}/{len(train_loader)}, "
-                          f"Loss: {loss.item():.6f}")
+        Args:
+            predictions: [batch_size, prediction_horizon, 8]
+            targets: [batch_size, prediction_horizon, 8]
         
-        # Validation
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for inputs, neighbors, targets, target_neighbors in val_loader:
-                inputs = inputs.to(device)
-                neighbors = neighbors.to(device)
-                targets = targets.to(device)
-                target_neighbors = target_neighbors.to(device)
-                outputs = model(inputs, neighbors)
-                loss = criterion(outputs, targets)
-                val_loss += loss.item()
+        Returns:
+            Loss value
+        """
+        # Create mask for non-zero targets (non-padded values)
+        mask = (targets != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
         
-        avg_train_loss = train_loss / len(train_loader)
-        avg_val_loss = val_loss / len(val_loader)
+        # Compute MSE
+        mse = (predictions - targets) ** 2
         
-        logger.info(f"Epoch {epoch+1}/{config['num_epochs']}: "
-                   f"Train Loss: {avg_train_loss:.6f}, "
-                   f"Val Loss: {avg_val_loss:.6f}")
+        # Apply mask and compute mean
+        masked_mse = mse * mask.unsqueeze(-1)  # [batch_size, prediction_horizon, 8]
         
-        # Save model every 10 epochs
-        if (epoch + 1) % 10 == 0:
-            save_path = Path(config['save_dir']) / f"{model_name}_epoch_{epoch+1}.pth"
-            save_path.parent.mkdir(exist_ok=True)
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'train_loss': avg_train_loss,
-                'val_loss': avg_val_loss,
-            }, save_path)
-            logger.info(f"Saved model to {save_path}")
+        if self.reduction == 'mean':
+            # Sum over all dimensions and divide by number of non-zero elements
+            total_elements = mask.sum()
+            if total_elements > 0:
+                return masked_mse.sum() / total_elements
+            else:
+                return torch.tensor(0.0, device=predictions.device)
+        elif self.reduction == 'sum':
+            return masked_mse.sum()
+        else:
+            return masked_mse
+
+def train_epoch(predictor: TrafficPredictor, 
+                vehicle_loader: DataLoader, 
+                pedestrian_loader: DataLoader,
+                vehicle_optimizer: optim.Optimizer,
+                pedestrian_optimizer: optim.Optimizer,
+                criterion: nn.Module,
+                device: torch.device) -> Tuple[float, float]:
+    """Train for one epoch."""
+    predictor.model.train()
+    
+    vehicle_losses = []
+    pedestrian_losses = []
+    
+    # Train on vehicle data
+    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(vehicle_loader):
+        loss = predictor.train_step(
+            input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'vehicle',
+            vehicle_optimizer, criterion
+        )
+        vehicle_losses.append(loss)
+    
+    # Train on pedestrian data
+    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pedestrian_loader):
+        loss = predictor.train_step(
+            input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'pedestrian',
+            pedestrian_optimizer, criterion
+        )
+        pedestrian_losses.append(loss)
+    
+    avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
+    avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
+    
+    return avg_vehicle_loss, avg_pedestrian_loss
+
+def validate_epoch(predictor: TrafficPredictor,
+                  vehicle_loader: DataLoader,
+                  pedestrian_loader: DataLoader,
+                  criterion: nn.Module) -> Tuple[float, float]:
+    """Validate for one epoch."""
+    predictor.model.eval()
+    
+    vehicle_losses = []
+    pedestrian_losses = []
+    
+    # Validate on vehicle data
+    with torch.no_grad():
+        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, _) in enumerate(vehicle_loader):
+            loss = predictor.validate(
+                input_tensor, neighbor_tensor, target_tensor, 'vehicle', criterion
+            )
+            vehicle_losses.append(loss)
+    
+    # Validate on pedestrian data
+    with torch.no_grad():
+        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, _) in enumerate(pedestrian_loader):
+            loss = predictor.validate(
+                input_tensor, neighbor_tensor, target_tensor, 'pedestrian', criterion
+            )
+            pedestrian_losses.append(loss)
+    
+    avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
+    avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
+    
+    return avg_vehicle_loss, avg_pedestrian_loss
+
+def create_model_config() -> Dict:
+    """Create model configuration."""
+    return {
+        'd_model': 128,
+        'num_heads': 8,
+        'num_layers': 4,
+        'dropout': 0.1,
+        'sequence_length': 10,
+        'prediction_horizon': 5,
+        'max_nbr': 10,
+        'batch_size': 32,
+        'learning_rate': 1e-4,
+        'num_epochs': 100,
+        'save_interval': 10,
+        'early_stopping_patience': 15
+    }
 
 def main():
     """Main training function."""
-    # Parse arguments and load config
-    args, config = parse_training_args()
+    # Configuration
+    config = create_model_config()
     
-    # Set device
-    device = torch.device(config['device'] if torch.cuda.is_available() else 'cpu')
-    logger.info(f"Using device: {device}")
-    logger.info(f"Using {config['num_workers']} workers for data loading")
+    # Data paths
+    train_data_folder = "data/train"
+    val_data_folder = "data/validation"
+    
+    # Create output directory
+    output_dir = Path("models")
+    output_dir.mkdir(exist_ok=True)
     
     # Load environments
     logger.info("Loading training environment...")
-    train_env = load_environment_data(args.train_data, "train")
+    train_env = load_environment_data(train_data_folder, "train")
     
     logger.info("Loading validation environment...")
-    val_env = load_environment_data(args.val_data, "validation")
+    val_env = load_environment_data(val_data_folder, "validation")
     
     # Create dataloaders
     logger.info("Creating dataloaders...")
-    (train_vehicle_loader, train_pedestrian_loader, 
-     val_vehicle_loader, val_pedestrian_loader) = create_dataloaders(train_env, val_env, config)
+    train_vehicle_loader, train_pedestrian_loader, val_vehicle_loader, val_pedestrian_loader = create_dataloaders(
+        train_env, val_env, config
+    )
     
-    # Train vehicle model
-    logger.info("Creating vehicle model...")
-    vehicle_model = create_model(config, model_type=args.model_type)
-    vehicle_model = vehicle_model.to(device)
+    # Initialize model
+    logger.info("Initializing model...")
+    predictor = TrafficPredictor(config)
     
-    train_model(vehicle_model, train_vehicle_loader, val_vehicle_loader, 
-                config, device, "vehicle")
+    # Loss function and optimizers
+    criterion = MSELoss()
     
-    # Train pedestrian model
-    logger.info("Creating pedestrian model...")
-    pedestrian_model = create_model(config, model_type=args.model_type)
-    pedestrian_model = pedestrian_model.to(device)
+    # Separate optimizers for vehicle and pedestrian models
+    vehicle_optimizer = optim.Adam(
+        predictor.model.models['vehicle_model'].parameters(),
+        lr=config['learning_rate']
+    )
     
-    train_model(pedestrian_model, train_pedestrian_loader, val_pedestrian_loader, 
-                config, device, "pedestrian")
+    pedestrian_optimizer = optim.Adam(
+        predictor.model.models['pedestrian_model'].parameters(),
+        lr=config['learning_rate']
+    )
     
-    logger.info("Training completed!")
+    # Learning rate schedulers
+    vehicle_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        vehicle_optimizer, mode='min', factor=0.5, patience=5, verbose=True
+    )
+    
+    pedestrian_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        pedestrian_optimizer, mode='min', factor=0.5, patience=5, verbose=True
+    )
+    
+    # Training history
+    history = {
+        'train_vehicle_loss': [],
+        'train_pedestrian_loss': [],
+        'val_vehicle_loss': [],
+        'val_pedestrian_loss': [],
+        'best_val_loss': float('inf'),
+        'patience_counter': 0
+    }
+    
+    logger.info("Starting training...")
+    start_time = time.time()
+    
+    for epoch in range(config['num_epochs']):
+        epoch_start_time = time.time()
+        
+        # Training
+        train_vehicle_loss, train_pedestrian_loss = train_epoch(
+            predictor, train_vehicle_loader, train_pedestrian_loader,
+            vehicle_optimizer, pedestrian_optimizer, criterion, predictor.device
+        )
+        
+        # Validation
+        val_vehicle_loss, val_pedestrian_loss = validate_epoch(
+            predictor, val_vehicle_loader, val_pedestrian_loader, criterion
+        )
+        
+        # Update learning rates
+        vehicle_scheduler.step(val_vehicle_loss)
+        pedestrian_scheduler.step(val_pedestrian_loss)
+        
+        # Record history
+        history['train_vehicle_loss'].append(train_vehicle_loss)
+        history['train_pedestrian_loss'].append(train_pedestrian_loss)
+        history['val_vehicle_loss'].append(val_vehicle_loss)
+        history['val_pedestrian_loss'].append(val_pedestrian_loss)
+        
+        # Calculate average validation loss
+        avg_val_loss = (val_vehicle_loss + val_pedestrian_loss) / 2
+        
+        # Early stopping check
+        if avg_val_loss < history['best_val_loss']:
+            history['best_val_loss'] = avg_val_loss
+            history['patience_counter'] = 0
+            
+            # Save best model
+            best_model_path = output_dir / "best_model.pth"
+            predictor.save_model(str(best_model_path))
+            logger.info(f"New best model saved with validation loss: {avg_val_loss:.6f}")
+        else:
+            history['patience_counter'] += 1
+        
+        # Log progress
+        epoch_time = time.time() - epoch_start_time
+        logger.info(
+            f"Epoch {epoch+1}/{config['num_epochs']} ({epoch_time:.2f}s): "
+            f"Train V:{train_vehicle_loss:.6f} P:{train_pedestrian_loss:.6f} "
+            f"Val V:{val_vehicle_loss:.6f} P:{val_pedestrian_loss:.6f} "
+            f"Patience: {history['patience_counter']}"
+        )
+        
+        # Save checkpoint periodically
+        if (epoch + 1) % config['save_interval'] == 0:
+            checkpoint_path = output_dir / f"checkpoint_epoch_{epoch+1}.pth"
+            predictor.save_model(str(checkpoint_path))
+        
+        # Early stopping
+        if history['patience_counter'] >= config['early_stopping_patience']:
+            logger.info(f"Early stopping triggered after {epoch+1} epochs")
+            break
+    
+    # Save final model
+    final_model_path = output_dir / "final_model.pth"
+    predictor.save_model(str(final_model_path))
+    
+    # Save training history
+    history_path = output_dir / "training_history.json"
+    with open(history_path, 'w') as f:
+        json.dump(history, f, indent=2)
+    
+    total_time = time.time() - start_time
+    logger.info(f"Training completed in {total_time:.2f} seconds")
+    logger.info(f"Best validation loss: {history['best_val_loss']:.6f}")
 
 if __name__ == "__main__":
     main() 
