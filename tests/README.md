@@ -7,11 +7,14 @@ This folder contains test files and example scripts for the IntInt project.
 ### Test Files
 - `test_vehicle_type_fix.py` - Tests the vehicle_type float handling functionality
 - `test_setup.py` - Test setup and configuration utilities
+- `test_modeling.py` - Tests the modeling components (data loading, model creation)
+- `test_args.py` - Tests argument parsing functionality
 
 ### Example Files
 - `example_usage.py` - Demonstrates basic usage of the Scene and Environment classes
 - `entity_example.py` - Shows how to work with entity data, vehicles, and pedestrians
 - `adjacency_example.py` - Demonstrates adjacency calculations and neighbor detection
+- `modeling_example.py` - Demonstrates the complete modeling pipeline
 - `run_tests.py` - Test runner script to execute all tests and examples
 
 ## Running Tests and Examples

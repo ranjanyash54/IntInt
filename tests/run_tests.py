@@ -42,6 +42,10 @@ def main():
     test_files = list(tests_dir.glob("test_*.py"))
     example_files = list(tests_dir.glob("*_example.py"))
     
+    # Sort files for consistent execution order
+    test_files.sort()
+    example_files.sort()
+    
     all_files = test_files + example_files
     
     if not all_files:

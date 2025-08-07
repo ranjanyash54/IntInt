@@ -1,0 +1,14 @@
+{
+    "batch_size": 256,
+    "learning_rate": 0.001,
+    "num_epochs": 100,
+    "hidden_size": 128,
+    "num_layers": 2,
+    "dropout": 0.1,
+    "sequence_length": 10,
+    "prediction_horizon": 5,
+    "device": "cuda",
+    "save_dir": "models",
+    "log_dir": "logs",
+    "num_workers": 4
+} 
