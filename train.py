@@ -33,13 +33,15 @@ def train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoad
         model.train()
         train_loss = 0.0
         
-        for batch_idx, (inputs, targets) in enumerate(train_loader):
+        for batch_idx, (inputs, neighbors, targets, target_neighbors) in enumerate(train_loader):
             inputs = inputs.to(device)
+            neighbors = neighbors.to(device)
             targets = targets.to(device)
+            target_neighbors = target_neighbors.to(device)
             
             # Forward pass
             optimizer.zero_grad()
-            outputs = model(inputs)
+            outputs = model(inputs, neighbors)
             loss = criterion(outputs, targets)
             
             # Backward pass
@@ -57,10 +59,12 @@ def train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoad
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for inputs, targets in val_loader:
+            for inputs, neighbors, targets, target_neighbors in val_loader:
                 inputs = inputs.to(device)
+                neighbors = neighbors.to(device)
                 targets = targets.to(device)
-                outputs = model(inputs)
+                target_neighbors = target_neighbors.to(device)
+                outputs = model(inputs, neighbors)
                 loss = criterion(outputs, targets)
                 val_loss += loss.item()
         

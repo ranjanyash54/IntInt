@@ -72,8 +72,12 @@ def test_data_loading():
         
         # Test getting a sample
         if len(dataset) > 0:
-            input_tensor, target_tensor = dataset[0]
-            print(f"✓ Sample shapes - Input: {input_tensor.shape}, Target: {target_tensor.shape}")
+            input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor = dataset[0]
+            print(f"✓ Sample shapes:")
+            print(f"  Input: {input_tensor.shape}")
+            print(f"  Neighbors: {neighbor_tensor.shape}")
+            print(f"  Target: {target_tensor.shape}")
+            print(f"  Target Neighbors: {target_neighbor_tensor.shape}")
         
         print("✓ Data loading test passed!")
         
@@ -105,17 +109,24 @@ def test_model_creation():
         batch_size = 4
         sequence_length = 10
         input_size = 8
+        max_nbr = 10
+        num_neighbor_types = 4
         
         x = torch.randn(batch_size, sequence_length, input_size)
-        output = model(x)
+        neighbors = torch.randn(batch_size, sequence_length, max_nbr * num_neighbor_types * input_size)
+        output = model(x, neighbors)
         
-        print(f"✓ Forward pass successful - Input: {x.shape}, Output: {output.shape}")
+        print(f"✓ Forward pass successful:")
+        print(f"  Input: {x.shape}")
+        print(f"  Neighbors: {neighbors.shape}")
+        print(f"  Output: {output.shape}")
         
         # Test on GPU if available
         if torch.cuda.is_available():
             model = model.cuda()
             x = x.cuda()
-            output = model(x)
+            neighbors = neighbors.cuda()
+            output = model(x, neighbors)
             print(f"✓ GPU forward pass successful")
         
         print("✓ Model creation test passed!")

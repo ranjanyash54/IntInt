@@ -7,6 +7,7 @@
     "dropout": 0.1,
     "sequence_length": 10,
     "prediction_horizon": 5,
+    "max_nbr": 10,
     "device": "cuda",
     "save_dir": "models",
     "log_dir": "logs",

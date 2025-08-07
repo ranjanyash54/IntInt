@@ -12,7 +12,7 @@ class TrafficDataset(Dataset):
     """Dataset for traffic prediction using scene, object, and time data."""
     
     def __init__(self, data_list: List[Tuple[int, int, int]], environment: Environment, 
-                 sequence_length: int = 10, prediction_horizon: int = 5):
+                 sequence_length: int = 10, prediction_horizon: int = 5, max_nbr: int = 10):
         """
         Initialize the dataset.
         
@@ -21,16 +21,19 @@ class TrafficDataset(Dataset):
             environment: Environment object containing scenes
             sequence_length: Number of timesteps to use as input
             prediction_horizon: Number of timesteps to predict
+            max_nbr: Maximum number of neighbors to include for each type
         """
         self.data_list = data_list
         self.environment = environment
         self.sequence_length = sequence_length
         self.prediction_horizon = prediction_horizon
+        self.max_nbr = max_nbr
         
         # Filter valid samples (with enough history and future)
         self.valid_samples = self._filter_valid_samples()
         
         logger.info(f"Created dataset with {len(self.valid_samples)} valid samples")
+        logger.info(f"Max neighbors per type: {self.max_nbr}")
     
     def _filter_valid_samples(self) -> List[Tuple[int, int, int]]:
         """Filter samples that have enough history and future data."""
@@ -62,14 +65,17 @@ class TrafficDataset(Dataset):
     def __len__(self) -> int:
         return len(self.valid_samples)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get a sample from the dataset."""
         scene_id, object_id, time = self.valid_samples[idx]
         scene = self.environment.get_scene(scene_id)
         
         # Get input sequence (history)
         input_sequence = []
+        neighbor_sequence = []
+        
         for t in range(time - self.sequence_length + 1, time + 1):
+            # Get entity data for current object
             entity_data = scene.get_entity_data(t, object_id)
             if entity_data is None:
                 # Use zero padding if data is missing
@@ -82,23 +88,77 @@ class TrafficDataset(Dataset):
                     entity_data['theta'], entity_data['vehicle_type']
                 ]
             input_sequence.append(features)
+            
+            # Get neighbors for this timestep
+            neighbors_features = self._get_neighbors_features(scene, object_id, t)
+            neighbor_sequence.append(neighbors_features)
         
-        # Get target sequence (future)
+        # Get target sequence (future) with all features
         target_sequence = []
+        target_neighbor_sequence = []
+        
         for t in range(time + 1, time + self.prediction_horizon + 1):
+            # Get entity data for current object (all features)
             entity_data = scene.get_entity_data(t, object_id)
             if entity_data is None:
                 # Use zero padding if data is missing
-                features = [0.0] * 2  # Only predict x, y
+                features = [0.0] * 8  # x, y, vx, vy, ax, ay, theta, vehicle_type
             else:
-                features = [entity_data['x'], entity_data['y']]
+                features = [
+                    entity_data['x'], entity_data['y'],
+                    entity_data['vx'], entity_data['vy'],
+                    entity_data['ax'], entity_data['ay'],
+                    entity_data['theta'], entity_data['vehicle_type']
+                ]
             target_sequence.append(features)
+            
+            # Get neighbors for target timestep
+            target_neighbors_features = self._get_neighbors_features(scene, object_id, t)
+            target_neighbor_sequence.append(target_neighbors_features)
         
         # Convert to tensors
         input_tensor = torch.tensor(input_sequence, dtype=torch.float32)
+        neighbor_tensor = torch.tensor(neighbor_sequence, dtype=torch.float32)
         target_tensor = torch.tensor(target_sequence, dtype=torch.float32)
+        target_neighbor_tensor = torch.tensor(target_neighbor_sequence, dtype=torch.float32)
         
-        return input_tensor, target_tensor
+        return input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor
+    
+    def _get_neighbors_features(self, scene, object_id: int, time: int) -> List[List[float]]:
+        """Get features for neighbors of the given object at the specified time."""
+        neighbor_features = []
+        
+        # Get all neighbor types
+        neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
+        
+        for neighbor_type in neighbor_types:
+            # Get neighbors for this type
+            neighbors = scene.get_neighbors(time, object_id, neighbor_type)
+            
+            # Limit to max_nbr neighbors
+            neighbors = neighbors[:self.max_nbr]
+            
+            # Get features for each neighbor
+            for neighbor_id in neighbors:
+                neighbor_data = scene.get_entity_data(time, neighbor_id)
+                if neighbor_data is not None:
+                    features = [
+                        neighbor_data['x'], neighbor_data['y'],
+                        neighbor_data['vx'], neighbor_data['vy'],
+                        neighbor_data['ax'], neighbor_data['ay'],
+                        neighbor_data['theta'], neighbor_data['vehicle_type']
+                    ]
+                else:
+                    # Zero padding for missing neighbor data
+                    features = [0.0] * 8
+                
+                neighbor_features.extend(features)
+            
+            # Pad with zeros if we have fewer than max_nbr neighbors
+            while len(neighbors) < self.max_nbr:
+                neighbor_features.extend([0.0] * 8)
+        
+        return neighbor_features
 
 def load_environment_data(data_folder: str, environment_type: str) -> Environment:
     """Load environment data from folder."""
@@ -156,25 +216,29 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
     train_vehicle_dataset = TrafficDataset(
         train_vehicle_samples, train_env,
         sequence_length=config['sequence_length'],
-        prediction_horizon=config['prediction_horizon']
+        prediction_horizon=config['prediction_horizon'],
+        max_nbr=config['max_nbr']
     )
     
     train_pedestrian_dataset = TrafficDataset(
         train_pedestrian_samples, train_env,
         sequence_length=config['sequence_length'],
-        prediction_horizon=config['prediction_horizon']
+        prediction_horizon=config['prediction_horizon'],
+        max_nbr=config['max_nbr']
     )
     
     val_vehicle_dataset = TrafficDataset(
         val_vehicle_samples, val_env,
         sequence_length=config['sequence_length'],
-        prediction_horizon=config['prediction_horizon']
+        prediction_horizon=config['prediction_horizon'],
+        max_nbr=config['max_nbr']
     )
     
     val_pedestrian_dataset = TrafficDataset(
         val_pedestrian_samples, val_env,
         sequence_length=config['sequence_length'],
-        prediction_horizon=config['prediction_horizon']
+        prediction_horizon=config['prediction_horizon'],
+        max_nbr=config['max_nbr']
     )
     
     # Create dataloaders

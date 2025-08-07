@@ -63,7 +63,9 @@ def main():
     print("\n--- DataLoader Creation ---")
     print("DataLoader structure:")
     print("  - Input: (batch_size, sequence_length, 8) - x, y, vx, vy, ax, ay, theta, vehicle_type")
-    print("  - Target: (batch_size, prediction_horizon, 2) - future x, y positions")
+    print("  - Neighbors: (batch_size, sequence_length, max_nbr * 4 * 8) - neighbor features")
+    print("  - Target: (batch_size, prediction_horizon, 8) - all future features")
+    print("  - Target Neighbors: (batch_size, prediction_horizon, max_nbr * 4 * 8) - future neighbor features")
     print("  - Separate loaders for vehicles and pedestrians")
     
     # Create model
@@ -81,14 +83,18 @@ def main():
         batch_size = 4
         sequence_length = config['sequence_length']
         input_size = 8
+        max_nbr = config.get('max_nbr', 10)
+        num_neighbor_types = 4
         
         x = torch.randn(batch_size, sequence_length, input_size)
+        neighbors = torch.randn(batch_size, sequence_length, max_nbr * num_neighbor_types * input_size)
         model.eval()
         with torch.no_grad():
-            output = model(x)
+            output = model(x, neighbors)
         
         print(f"✓ Forward pass test successful")
         print(f"  Input shape: {x.shape}")
+        print(f"  Neighbors shape: {neighbors.shape}")
         print(f"  Output shape: {output.shape}")
         
     except Exception as e:
@@ -100,16 +106,36 @@ def main():
     print("Training pipeline:")
     print("  1. Load training and validation environments")
     print("  2. Create separate dataloaders for vehicles and pedestrians")
-    print("  3. Train separate models for vehicles and pedestrians")
-    print("  4. Save models periodically during training")
-    print("  5. Monitor training and validation loss")
+    print("  3. For each sample, get main entity features and neighbor features")
+    print("  4. Predict all 8 features for future timesteps")
+    print("  5. Train separate models for vehicles and pedestrians")
+    print("  6. Save models periodically during training")
+    print("  7. Monitor training and validation loss")
     
     print("\n--- Model Architecture ---")
-    print("SimpleTrafficPredictor:")
-    print("  - Input: Flattened sequence of 10 timesteps × 8 features")
-    print("  - Hidden layers: 128 → 64 → 10 (5 future timesteps × 2 coordinates)")
+    print("SimpleTrafficPredictor with neighbors:")
+    print("  - Main entity: Flattened sequence of 10 timesteps × 8 features")
+    print("  - Neighbors: 10 timesteps × 10 neighbors × 4 types × 8 features")
+    print("  - Combined input: Main + Neighbor features")
+    print("  - Hidden layers: 128 → 64 → 40 (5 future timesteps × 8 features)")
     print("  - Activation: ReLU")
     print("  - Dropout: 0.1")
+    
+    print("\n--- Target Features ---")
+    print("Now predicting all 8 features:")
+    print("  - x, y: Position coordinates")
+    print("  - vx, vy: Velocity components")
+    print("  - ax, ay: Acceleration components")
+    print("  - theta: Orientation angle")
+    print("  - vehicle_type: Entity type (0.0 for vehicle, 1.0 for pedestrian)")
+    
+    print("\n--- Neighbor Information ---")
+    print("Neighbor types:")
+    print("  - veh-veh: Vehicle to vehicle interactions")
+    print("  - veh-ped: Vehicle to pedestrian interactions")
+    print("  - ped-veh: Pedestrian to vehicle interactions")
+    print("  - ped-ped: Pedestrian to pedestrian interactions")
+    print(f"  - Max neighbors per type: {config.get('max_nbr', 10)}")
     
     print("\n--- Usage ---")
     print("To run the complete training:")
