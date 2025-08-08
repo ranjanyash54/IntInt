@@ -90,7 +90,9 @@ class TrafficDataset(Dataset):
             input_sequence.append(features)
             
             # Get neighbors for this timestep
-            neighbors_features = self._get_neighbors_features(scene, object_id, t)
+            neighbors_features_dict = self._get_neighbors_features(scene, object_id, t)
+            # Flatten the dictionary into a list for tensor conversion
+            neighbors_features = self._flatten_neighbors_dict(neighbors_features_dict)
             neighbor_sequence.append(neighbors_features)
         
         # Get target sequence (future) with all features
@@ -113,7 +115,9 @@ class TrafficDataset(Dataset):
             target_sequence.append(features)
             
             # Get neighbors for target timestep
-            target_neighbors_features = self._get_neighbors_features(scene, object_id, t)
+            target_neighbors_features_dict = self._get_neighbors_features(scene, object_id, t)
+            # Flatten the dictionary into a list for tensor conversion
+            target_neighbors_features = self._flatten_neighbors_dict(target_neighbors_features_dict)
             target_neighbor_sequence.append(target_neighbors_features)
         
         # Convert to tensors
@@ -124,14 +128,16 @@ class TrafficDataset(Dataset):
         
         return input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor
     
-    def _get_neighbors_features(self, scene, object_id: int, time: int) -> List[List[float]]:
-        """Get features for neighbors of the given object at the specified time."""
-        neighbor_features = []
+    def _get_neighbors_features(self, scene, object_id: int, time: int) -> Dict[str, List[List[float]]]:
+        """Get features for neighbors of the given object at the specified time, organized by type."""
+        neighbor_features = {}
         
         # Get all neighbor types
         neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
         
         for neighbor_type in neighbor_types:
+            neighbor_features[neighbor_type] = []
+            
             # Get neighbors for this type
             neighbors = scene.get_neighbors(time, object_id, neighbor_type)
             
@@ -152,13 +158,24 @@ class TrafficDataset(Dataset):
                     # Zero padding for missing neighbor data
                     features = [0.0] * 8
                 
-                neighbor_features.extend(features)
+                neighbor_features[neighbor_type].append(features)
             
             # Pad with zeros if we have fewer than max_nbr neighbors
-            while len(neighbors) < self.max_nbr:
-                neighbor_features.extend([0.0] * 8)
+            while len(neighbor_features[neighbor_type]) < self.max_nbr:
+                neighbor_features[neighbor_type].append([0.0] * 8)
         
         return neighbor_features
+
+    def _flatten_neighbors_dict(self, neighbors_dict: Dict[str, List[List[float]]]) -> List[float]:
+        """Flatten the neighbors dictionary into a single list for tensor conversion."""
+        flattened = []
+        neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
+        
+        for neighbor_type in neighbor_types:
+            for neighbor_features in neighbors_dict[neighbor_type]:
+                flattened.extend(neighbor_features)
+        
+        return flattened
 
 def load_environment_data(data_folder: str, environment_type: str) -> Environment:
     """Load environment data from folder."""
