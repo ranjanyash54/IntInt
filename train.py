@@ -15,10 +15,12 @@ from typing import Dict, List, Tuple
 import json
 import time
 from tqdm import tqdm
+import joblib
 
 from data_loader import load_environment_data, create_dataloaders
 from model import TrafficPredictor
 from environment import Environment
+from argument_parser import parse_training_args
 
 # Set up logging
 logging.basicConfig(
@@ -87,13 +89,14 @@ def train_epoch(predictor: TrafficPredictor,
         )
         vehicle_losses.append(loss)
     
-    # Train on pedestrian data
-    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pedestrian_loader):
-        loss = predictor.train_step(
-            input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'pedestrian',
-            pedestrian_optimizer, criterion
-        )
-        pedestrian_losses.append(loss)
+    # Train on pedestrian data (if available)
+    if pedestrian_loader is not None:
+        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pedestrian_loader):
+            loss = predictor.train_step(
+                input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'pedestrian',
+                pedestrian_optimizer, criterion
+            )
+            pedestrian_losses.append(loss)
     
     avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
     avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
@@ -118,66 +121,58 @@ def validate_epoch(predictor: TrafficPredictor,
             )
             vehicle_losses.append(loss)
     
-    # Validate on pedestrian data
-    with torch.no_grad():
-        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, _) in enumerate(pedestrian_loader):
-            loss = predictor.validate(
-                input_tensor, neighbor_tensor, target_tensor, 'pedestrian', criterion
-            )
-            pedestrian_losses.append(loss)
+    # Validate on pedestrian data (if available)
+    if pedestrian_loader is not None:
+        with torch.no_grad():
+            for batch_idx, (input_tensor, neighbor_tensor, target_tensor, _) in enumerate(pedestrian_loader):
+                loss = predictor.validate(
+                    input_tensor, neighbor_tensor, target_tensor, 'pedestrian', criterion
+                )
+                pedestrian_losses.append(loss)
     
     avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
     avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
     
     return avg_vehicle_loss, avg_pedestrian_loss
 
-def create_model_config() -> Dict:
-    """Create model configuration."""
-    return {
-        'd_model': 128,
-        'num_heads': 8,
-        'num_layers': 4,
-        'dropout': 0.1,
-        'sequence_length': 10,
-        'prediction_horizon': 5,
-        'max_nbr': 10,
-        'batch_size': 32,
-        'learning_rate': 1e-4,
-        'num_epochs': 100,
-        'save_interval': 10,
-        'early_stopping_patience': 15
-    }
-
 def main():
     """Main training function."""
-    # Configuration
-    config = create_model_config()
+    # Parse arguments and load configuration
+    args, config = parse_training_args()
     
     # Data paths
-    train_data_folder = "data/train"
-    val_data_folder = "data/validation"
+    train_data_folder = args.train_data
+    val_data_folder = args.val_data
     
     # Create output directory
-    output_dir = Path("models")
+    output_dir = Path(config.get('save_dir', 'models'))
     output_dir.mkdir(exist_ok=True)
     
-    # Load environments
-    logger.info("Loading training environment...")
-    train_env = load_environment_data(train_data_folder, "train")
+    # Load environments from joblib files
+    logger.info("Loading training environment from joblib file...")
+    train_env_path = Path("output/train_environment.pkl")
+    train_env = joblib.load(train_env_path)
     
-    logger.info("Loading validation environment...")
-    val_env = load_environment_data(val_data_folder, "validation")
+    logger.info("Loading validation environment from joblib file...")
+    val_env_path = Path("output/validation_environment.pkl")
+    val_env = joblib.load(val_env_path)
     
     # Create dataloaders
     logger.info("Creating dataloaders...")
-    train_vehicle_loader, train_pedestrian_loader, val_vehicle_loader, val_pedestrian_loader = create_dataloaders(
-        train_env, val_env, config
-    )
+    dataloaders = create_dataloaders(train_env, val_env, config)
+    train_vehicle_loader, train_pedestrian_loader, val_vehicle_loader, val_pedestrian_loader = dataloaders
     
     # Initialize model
     logger.info("Initializing model...")
     predictor = TrafficPredictor(config)
     
+    # Log device information
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logger.info(f"CUDA device: {torch.cuda.get_device_name()}")
+        logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    logger.info(f"Model running on: {predictor.device}")
+
     # Loss function and optimizers
     criterion = MSELoss()
     
@@ -187,18 +182,22 @@ def main():
         lr=config['learning_rate']
     )
     
-    pedestrian_optimizer = optim.Adam(
-        predictor.model.models['pedestrian_model'].parameters(),
-        lr=config['learning_rate']
-    )
+    # Create pedestrian optimizer only if pedestrian model exists
+    pedestrian_optimizer = None
+    pedestrian_scheduler = None
+    if 'pedestrian_model' in predictor.model.models:
+        pedestrian_optimizer = optim.Adam(
+            predictor.model.models['pedestrian_model'].parameters(),
+            lr=config['learning_rate']
+        )
+        
+        pedestrian_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            pedestrian_optimizer, mode='min', factor=0.5, patience=5, verbose=True
+        )
     
     # Learning rate schedulers
     vehicle_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         vehicle_optimizer, mode='min', factor=0.5, patience=5, verbose=True
-    )
-    
-    pedestrian_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        pedestrian_optimizer, mode='min', factor=0.5, patience=5, verbose=True
     )
     
     # Training history
@@ -230,7 +229,8 @@ def main():
         
         # Update learning rates
         vehicle_scheduler.step(val_vehicle_loss)
-        pedestrian_scheduler.step(val_pedestrian_loss)
+        if pedestrian_scheduler is not None:
+            pedestrian_scheduler.step(val_pedestrian_loss)
         
         # Record history
         history['train_vehicle_loss'].append(train_vehicle_loss)
