@@ -172,8 +172,15 @@ class TrafficDataset(Dataset):
         neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
         
         for neighbor_type in neighbor_types:
-            for neighbor_features in neighbors_dict[neighbor_type]:
-                flattened.extend(neighbor_features)
+            if neighbor_type in neighbors_dict:
+                for neighbor_features in neighbors_dict[neighbor_type]:
+                    flattened.extend(neighbor_features)
+            else:
+                # Pad with zeros for missing neighbor types
+                max_nbr = 10  # Default max neighbors
+                features_per_neighbor = 8
+                for _ in range(max_nbr):
+                    flattened.extend([0.0] * features_per_neighbor)
         
         return flattened
 
@@ -224,21 +231,25 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
     Returns:
         Tuple of (train_vehicle_loader, train_pedestrian_loader, 
                  val_vehicle_loader, val_pedestrian_loader)
+        Note: pedestrian loaders will be None if no pedestrian data is available
     """
     # Create data lists
     train_vehicle_samples, train_pedestrian_samples = create_data_lists(train_env)
     val_vehicle_samples, val_pedestrian_samples = create_data_lists(val_env)
     
-    # Create datasets
+    # Check if we have any pedestrian data
+    has_train_pedestrians = len(train_pedestrian_samples) > 0
+    has_val_pedestrians = len(val_pedestrian_samples) > 0
+    
+    logger.info(f"Data availability:")
+    logger.info(f"  Training vehicles: {len(train_vehicle_samples)} samples")
+    logger.info(f"  Training pedestrians: {len(train_pedestrian_samples)} samples")
+    logger.info(f"  Validation vehicles: {len(val_vehicle_samples)} samples")
+    logger.info(f"  Validation pedestrians: {len(val_pedestrian_samples)} samples")
+    
+    # Create vehicle datasets
     train_vehicle_dataset = TrafficDataset(
         train_vehicle_samples, train_env,
-        sequence_length=config['sequence_length'],
-        prediction_horizon=config['prediction_horizon'],
-        max_nbr=config['max_nbr']
-    )
-    
-    train_pedestrian_dataset = TrafficDataset(
-        train_pedestrian_samples, train_env,
         sequence_length=config['sequence_length'],
         prediction_horizon=config['prediction_horizon'],
         max_nbr=config['max_nbr']
@@ -251,23 +262,29 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         max_nbr=config['max_nbr']
     )
     
-    val_pedestrian_dataset = TrafficDataset(
-        val_pedestrian_samples, val_env,
-        sequence_length=config['sequence_length'],
-        prediction_horizon=config['prediction_horizon'],
-        max_nbr=config['max_nbr']
-    )
+    # Create pedestrian datasets only if data is available
+    train_pedestrian_dataset = None
+    val_pedestrian_dataset = None
+    
+    if has_train_pedestrians:
+        train_pedestrian_dataset = TrafficDataset(
+            train_pedestrian_samples, train_env,
+            sequence_length=config['sequence_length'],
+            prediction_horizon=config['prediction_horizon'],
+            max_nbr=config['max_nbr']
+        )
+    
+    if has_val_pedestrians:
+        val_pedestrian_dataset = TrafficDataset(
+            val_pedestrian_samples, val_env,
+            sequence_length=config['sequence_length'],
+            prediction_horizon=config['prediction_horizon'],
+            max_nbr=config['max_nbr']
+        )
     
     # Create dataloaders
     train_vehicle_loader = DataLoader(
         train_vehicle_dataset, 
-        batch_size=config['batch_size'], 
-        shuffle=True,
-        num_workers=config.get('num_workers', 0)
-    )
-    
-    train_pedestrian_loader = DataLoader(
-        train_pedestrian_dataset, 
         batch_size=config['batch_size'], 
         shuffle=True,
         num_workers=config.get('num_workers', 0)
@@ -280,17 +297,30 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         num_workers=config.get('num_workers', 0)
     )
     
-    val_pedestrian_loader = DataLoader(
-        val_pedestrian_dataset, 
-        batch_size=config['batch_size'], 
-        shuffle=False,
-        num_workers=config.get('num_workers', 0)
-    )
+    # Create pedestrian dataloaders only if datasets exist
+    train_pedestrian_loader = None
+    val_pedestrian_loader = None
+    
+    if train_pedestrian_dataset is not None:
+        train_pedestrian_loader = DataLoader(
+            train_pedestrian_dataset, 
+            batch_size=config['batch_size'], 
+            shuffle=True,
+            num_workers=config.get('num_workers', 0)
+        )
+    
+    if val_pedestrian_dataset is not None:
+        val_pedestrian_loader = DataLoader(
+            val_pedestrian_dataset, 
+            batch_size=config['batch_size'], 
+            shuffle=False,
+            num_workers=config.get('num_workers', 0)
+        )
     
     logger.info(f"Created dataloaders:")
     logger.info(f"  Train vehicles: {len(train_vehicle_loader)} batches")
-    logger.info(f"  Train pedestrians: {len(train_pedestrian_loader)} batches")
+    logger.info(f"  Train pedestrians: {len(train_pedestrian_loader) if train_pedestrian_loader else 0} batches")
     logger.info(f"  Val vehicles: {len(val_vehicle_loader)} batches")
-    logger.info(f"  Val pedestrians: {len(val_pedestrian_loader)} batches")
+    logger.info(f"  Val pedestrians: {len(val_pedestrian_loader) if val_pedestrian_loader else 0} batches")
     
     return train_vehicle_loader, train_pedestrian_loader, val_vehicle_loader, val_pedestrian_loader 

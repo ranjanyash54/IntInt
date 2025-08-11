@@ -348,14 +348,23 @@ class TrafficPredictionModel(nn.Module):
         self.prediction_horizon = config.get('prediction_horizon', 5)
         self.max_nbr = config.get('max_nbr', 10)
         
-        # Neighbor types
-        self.neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
+        # Check if pedestrian data is available
+        self.has_pedestrian_data = config.get('has_pedestrian_data', True)
         
-        # Create separate models for vehicles and pedestrians
+        # Neighbor types - adjust based on available data
+        if self.has_pedestrian_data:
+            self.neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
+        else:
+            self.neighbor_types = ['veh-veh']  # Only vehicle-vehicle interactions
+        
+        # Create models based on available data
         self.models = nn.ModuleDict({
-            'vehicle_model': self._create_entity_model('vehicle'),
-            'pedestrian_model': self._create_entity_model('pedestrian')
+            'vehicle_model': self._create_entity_model('vehicle')
         })
+        
+        # Only create pedestrian model if pedestrian data is available
+        if self.has_pedestrian_data:
+            self.models['pedestrian_model'] = self._create_entity_model('pedestrian')
         
         logger.info(f"Created TrafficPredictionModel with:")
         logger.info(f"  d_model: {self.d_model}")
@@ -363,6 +372,8 @@ class TrafficPredictionModel(nn.Module):
         logger.info(f"  num_layers: {self.num_layers}")
         logger.info(f"  sequence_length: {self.sequence_length}")
         logger.info(f"  prediction_horizon: {self.prediction_horizon}")
+        logger.info(f"  Has pedestrian data: {self.has_pedestrian_data}")
+        logger.info(f"  Neighbor types: {self.neighbor_types}")
     
     def _create_entity_model(self, entity_type: str) -> nn.Module:
         """Create a model for a specific entity type (vehicle or pedestrian)."""
@@ -442,7 +453,11 @@ class TrafficPredictionModel(nn.Module):
         Returns:
             Predicted trajectory: [batch_size, prediction_horizon, 8]
         """
-        model = self.models[f'{entity_type}_model']
+        model_key = f'{entity_type}_model'
+        if model_key not in self.models:
+            raise ValueError(f"Model for entity type '{entity_type}' not found. Available models: {list(self.models.keys())}")
+        
+        model = self.models[model_key]
         
         # Embed input features
         embedded = model['input_embedding'](input_tensor)  # [batch_size, seq_len, d_model]

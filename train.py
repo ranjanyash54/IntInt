@@ -162,8 +162,26 @@ def main():
     dataloaders = create_dataloaders(train_env, val_env, config)
     train_vehicle_loader, train_pedestrian_loader, val_vehicle_loader, val_pedestrian_loader = dataloaders
     
+    # Check if pedestrian data is available
+    has_pedestrian_data = train_pedestrian_loader is not None and val_pedestrian_loader is not None
+    config['has_pedestrian_data'] = has_pedestrian_data
+    
+    if has_pedestrian_data:
+        logger.info("Pedestrian data detected - training both vehicle and pedestrian models")
+    else:
+        logger.info("No pedestrian data detected - training vehicle model only")
+        logger.info("Note: Neighbor attention will only use vehicle-vehicle interactions")
+        logger.info("Note: Pedestrian losses will be recorded as 0.0 in training history")
+    
     # Initialize model
     logger.info("Initializing model...")
+    
+    # Ensure model configuration is compatible with available data
+    if not has_pedestrian_data:
+        # If no pedestrian data, ensure the model knows about it
+        config['has_pedestrian_data'] = False
+        logger.info("Model configured for vehicle-only training")
+    
     predictor = TrafficPredictor(config)
     
     # Log device information
@@ -192,12 +210,12 @@ def main():
         )
         
         pedestrian_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            pedestrian_optimizer, mode='min', factor=0.5, patience=5, verbose=True
+            pedestrian_optimizer, mode='min', factor=0.5, patience=5
         )
     
     # Learning rate schedulers
     vehicle_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        vehicle_optimizer, mode='min', factor=0.5, patience=5, verbose=True
+        vehicle_optimizer, mode='min', factor=0.5, patience=5
     )
     
     # Training history
@@ -234,12 +252,21 @@ def main():
         
         # Record history
         history['train_vehicle_loss'].append(train_vehicle_loss)
-        history['train_pedestrian_loss'].append(train_pedestrian_loss)
         history['val_vehicle_loss'].append(val_vehicle_loss)
-        history['val_pedestrian_loss'].append(val_pedestrian_loss)
+        
+        if has_pedestrian_data:
+            history['train_pedestrian_loss'].append(train_pedestrian_loss)
+            history['val_pedestrian_loss'].append(val_pedestrian_loss)
+        else:
+            # Record 0 for pedestrian losses when no pedestrian data
+            history['train_pedestrian_loss'].append(0.0)
+            history['val_pedestrian_loss'].append(0.0)
         
         # Calculate average validation loss
-        avg_val_loss = (val_vehicle_loss + val_pedestrian_loss) / 2
+        if has_pedestrian_data:
+            avg_val_loss = (val_vehicle_loss + val_pedestrian_loss) / 2
+        else:
+            avg_val_loss = val_vehicle_loss
         
         # Early stopping check
         if avg_val_loss < history['best_val_loss']:
@@ -255,12 +282,20 @@ def main():
         
         # Log progress
         epoch_time = time.time() - epoch_start_time
-        logger.info(
-            f"Epoch {epoch+1}/{config['num_epochs']} ({epoch_time:.2f}s): "
-            f"Train V:{train_vehicle_loss:.6f} P:{train_pedestrian_loss:.6f} "
-            f"Val V:{val_vehicle_loss:.6f} P:{val_pedestrian_loss:.6f} "
-            f"Patience: {history['patience_counter']}"
-        )
+        if has_pedestrian_data:
+            logger.info(
+                f"Epoch {epoch+1}/{config['num_epochs']} ({epoch_time:.2f}s): "
+                f"Train V:{train_vehicle_loss:.6f} P:{train_pedestrian_loss:.6f} "
+                f"Val V:{val_vehicle_loss:.6f} P:{val_pedestrian_loss:.6f} "
+                f"Patience: {history['patience_counter']}"
+            )
+        else:
+            logger.info(
+                f"Epoch {epoch+1}/{config['num_epochs']} ({epoch_time:.2f}s): "
+                f"Train V:{train_vehicle_loss:.6f} "
+                f"Val V:{val_vehicle_loss:.6f} "
+                f"Patience: {history['patience_counter']}"
+            )
         
         # Save checkpoint periodically
         if (epoch + 1) % config['save_interval'] == 0:
