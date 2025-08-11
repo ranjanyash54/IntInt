@@ -273,7 +273,7 @@ class NeighborAttentionLayer(nn.Module):
         # Linear layers for embedding object state and neighbor features
         self.object_embedding = nn.Linear(8, d_model)  # 8 features: x, y, vx, vy, ax, ay, theta, vehicle_type
         self.neighbor_embeddings = nn.ModuleDict({
-            f"{neighbor_type}_embedding": nn.Linear(8, d_model)
+            f"{neighbor_type}_embedding": nn.Linear(5, d_model)  # 5 features: x, y, vx, vy, theta
             for neighbor_type in neighbor_types
         })
         
@@ -285,9 +285,9 @@ class NeighborAttentionLayer(nn.Module):
         Forward pass for neighbor attention.
         
         Args:
-            object_state: [batch_size, seq_len, 8] - Object state features
+            object_state: [batch_size, seq_len, 8] - Object state features (x, y, vx, vy, ax, ay, theta, vehicle_type)
             neighbor_features: Dict with neighbor type as key and features as value
-                             Each value has shape [batch_size, seq_len, max_nbr, 8]
+                             Each value has shape [batch_size, seq_len, max_nbr, 5] (x, y, vx, vy, theta)
         
         Returns:
             Updated object state: [batch_size, seq_len, d_model]
@@ -416,17 +416,17 @@ class TrafficPredictionModel(nn.Module):
         
         Args:
             neighbor_tensor: [batch_size, seq_len, total_neighbor_features]
-                           where total_neighbor_features = 4 * max_nbr * 8
+                           where total_neighbor_features = 4 * max_nbr * 5 (5 features per neighbor)
         
         Returns:
             Dict with neighbor type as key and features as value
         """
         batch_size, seq_len, _ = neighbor_tensor.shape
-        features_per_neighbor = 8
+        features_per_neighbor = 5
         neighbors_per_type = self.max_nbr
         
         # Reshape to separate neighbor types
-        # Each neighbor type has max_nbr neighbors, each with 8 features
+        # Each neighbor type has max_nbr neighbors, each with 5 features
         neighbor_tensor_reshaped = neighbor_tensor.view(
             batch_size, seq_len, len(self.neighbor_types), neighbors_per_type, features_per_neighbor
         )

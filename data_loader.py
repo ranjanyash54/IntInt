@@ -82,10 +82,10 @@ class TrafficDataset(Dataset):
                 features = [0.0] * 8  # x, y, vx, vy, ax, ay, theta, vehicle_type
             else:
                 features = [
-                    entity_data['x'], entity_data['y'],
-                    entity_data['vx'], entity_data['vy'],
+                    0.0, 0.0,
+                    0.0, 0.0,
                     entity_data['ax'], entity_data['ay'],
-                    entity_data['theta'], entity_data['vehicle_type']
+                    0.0
                 ]
             input_sequence.append(features)
             
@@ -128,9 +128,19 @@ class TrafficDataset(Dataset):
         
         return input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor
     
-    def _get_neighbors_features(self, scene, object_id: int, time: int) -> Dict[str, List[List[float]]]:
+    def _get_neighbors_features(self, scene, object_id: int, time: int, future: bool = False) -> Dict[str, List[List[float]]]:
         """Get features for neighbors of the given object at the specified time, organized by type."""
         neighbor_features = {}
+        
+        # Get entity data for normalization
+        entity_data = scene.get_entity_data(time, object_id)
+        if entity_data is None:
+            # If entity data is missing, use zeros for normalization
+            entity_x, entity_y, entity_vx, entity_vy, entity_theta = 0.0, 0.0, 0.0, 0.0, 0.0
+        else:
+            entity_x, entity_y = entity_data['x'], entity_data['y']
+            entity_vx, entity_vy = entity_data['vx'], entity_data['vy']
+            entity_theta = entity_data['theta']
         
         # Get all neighbor types
         neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
@@ -148,21 +158,43 @@ class TrafficDataset(Dataset):
             for neighbor_id in neighbors:
                 neighbor_data = scene.get_entity_data(time, neighbor_id)
                 if neighbor_data is not None:
+                    # Normalize neighbor features relative to entity
+                    # Position: relative to entity position
+                    if future:
+                        rel_x = neighbor_data['x']
+                        rel_y = neighbor_data['y']
+                    else:
+                        rel_x = neighbor_data['x'] - entity_x
+                        rel_y = neighbor_data['y'] - entity_y
+                    
+                    # Velocity: relative to entity velocity
+                    if future:
+                        rel_vx = neighbor_data['vx']
+                        rel_vy = neighbor_data['vy']
+                    else:
+                        rel_vx = neighbor_data['vx'] - entity_vx
+                        rel_vy = neighbor_data['vy'] - entity_vy
+
+                    # Orientation: relative to entity orientation
+                    if future:
+                        rel_theta = neighbor_data['theta']
+                    else:
+                        rel_theta = neighbor_data['theta'] - entity_theta
+                    
                     features = [
-                        neighbor_data['x'], neighbor_data['y'],
-                        neighbor_data['vx'], neighbor_data['vy'],
-                        neighbor_data['ax'], neighbor_data['ay'],
-                        neighbor_data['theta'], neighbor_data['vehicle_type']
+                        rel_x, rel_y,           # Relative position
+                        rel_vx, rel_vy,         # Relative velocity
+                        rel_theta,              # Relative orientation
                     ]
                 else:
                     # Zero padding for missing neighbor data
-                    features = [0.0] * 8
+                    features = [0.0] * 5
                 
                 neighbor_features[neighbor_type].append(features)
             
             # Pad with zeros if we have fewer than max_nbr neighbors
             while len(neighbor_features[neighbor_type]) < self.max_nbr:
-                neighbor_features[neighbor_type].append([0.0] * 8)
+                neighbor_features[neighbor_type].append([0.0] * 5)
         
         return neighbor_features
 
@@ -178,7 +210,7 @@ class TrafficDataset(Dataset):
             else:
                 # Pad with zeros for missing neighbor types
                 max_nbr = 10  # Default max neighbors
-                features_per_neighbor = 8
+                features_per_neighbor = 5
                 for _ in range(max_nbr):
                     flattened.extend([0.0] * features_per_neighbor)
         
