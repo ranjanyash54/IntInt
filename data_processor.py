@@ -2,7 +2,7 @@ import pandas as pd
 import os
 from pathlib import Path
 import glob
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import logging
 from environment import Environment
 
@@ -135,6 +135,37 @@ def main():
             if len(validation_env) > 0:
                 first_scene = validation_env[0]
                 print(f"  First scene: {first_scene}")
+
+    # Dump environments to files
+    print("\n=== DUMPING ENVIRONMENTS TO FILES ===")
+
+    # Create output directory if it doesn't exist
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+
+    # Dump train environment
+    if processor.train_environment and len(processor.train_environment) > 0:
+        train_output_path = output_dir / "train_environment.pkl"
+        try:
+            processor.train_environment.save_to_file(str(train_output_path))
+            print(f"✓ Training environment saved to: {train_output_path}")
+        except Exception as e:
+            print(f"✗ Failed to save training environment: {e}")
+    else:
+        print("⚠ No training environment to save")
+
+    # Dump validation environment
+    if processor.validation_environment and len(processor.validation_environment) > 0:
+        validation_output_path = output_dir / "validation_environment.pkl"
+        try:
+            processor.validation_environment.save_to_file(str(validation_output_path))
+            print(f"✓ Validation environment saved to: {validation_output_path}")
+        except Exception as e:
+            print(f"✗ Failed to save validation environment: {e}")
+    else:
+        print("⚠ No validation environment to save")
+    
+    print(f"\nEnvironment files saved to: {output_dir.absolute()}")
 
 
 if __name__ == "__main__":
