@@ -264,72 +264,33 @@ class NeighborAttentionLayer(nn.Module):
         self.d_model = d_model
         self.neighbor_types = neighbor_types
         
-        # Separate attention layers for each neighbor type
-        self.attention_layers = nn.ModuleDict({
-            f"{neighbor_type}_attention": MultiHeadAttention(d_model, num_heads, dropout)
-            for neighbor_type in neighbor_types
-        })
+        # Single attention layer for all neighbors
+        self.attention = MultiHeadAttention(d_model, num_heads, dropout)
         
-        # Linear layers for embedding object state and neighbor features
-        self.object_embedding = nn.Linear(8, d_model)  # 8 features: x, y, vx, vy, ax, ay, theta, vehicle_type
-        self.neighbor_embeddings = nn.ModuleDict({
-            f"{neighbor_type}_embedding": nn.Linear(5, d_model)  # 5 features: x, y, vx, vy, theta
-            for neighbor_type in neighbor_types
-        })
-        
-        # Output projection
-        self.output_projection = nn.Linear(d_model * len(neighbor_types), d_model)
-        
-    def forward(self, object_state: torch.Tensor, neighbor_features: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, object_embedded: torch.Tensor, neighbor_embedded: torch.Tensor) -> torch.Tensor:
         """
         Forward pass for neighbor attention.
         
         Args:
-            object_state: [batch_size, seq_len, 8] - Object state features (x, y, vx, vy, ax, ay, theta, vehicle_type)
-            neighbor_features: Dict with neighbor type as key and features as value
-                             Each value has shape [batch_size, seq_len, max_nbr, 5] (x, y, vx, vy, theta)
+            object_embedded: [batch_size, seq_len, d_model] - Already embedded object state
+            neighbor_embedded: [batch_size, seq_len, max_nbr*len(neighbor_types), d_model] - Already embedded neighbor state
         
         Returns:
             Updated object state: [batch_size, seq_len, d_model]
         """
-        batch_size, seq_len, _ = object_state.shape
+        batch_size, seq_len, _ = object_embedded.shape
         
-        # Embed object state
-        object_embedded = self.object_embedding(object_state)  # [batch_size, seq_len, d_model]
+        # Reshape for attention: combine batch and seq dimensions
+        neighbor_embedded_reshaped = neighbor_embedded.view(-1, neighbor_embedded.size(-2), neighbor_embedded.size(-1))
+        object_embedded_reshaped = object_embedded.view(-1, 1, object_embedded.size(-1))
         
-        # Process each neighbor type
-        neighbor_outputs = []
+        # Apply attention: object as query, neighbors as key and value
+        attended_output, _ = self.attention(
+            object_embedded_reshaped, neighbor_embedded_reshaped, neighbor_embedded_reshaped
+        )
         
-        for neighbor_type in self.neighbor_types:
-            if neighbor_type in neighbor_features:
-                neighbor_feat = neighbor_features[neighbor_type]  # [batch_size, seq_len, max_nbr, 8]
-                
-                # Embed neighbor features
-                neighbor_embedded = self.neighbor_embeddings[f"{neighbor_type}_embedding"](neighbor_feat)
-                # [batch_size, seq_len, max_nbr, d_model]
-                
-                # Reshape for attention: combine batch and seq dimensions
-                neighbor_embedded_reshaped = neighbor_embedded.view(-1, neighbor_embedded.size(-2), neighbor_embedded.size(-1))
-                object_embedded_reshaped = object_embedded.view(-1, 1, object_embedded.size(-1))
-                
-                # Apply attention
-                attended_output, _ = self.attention_layers[f"{neighbor_type}_attention"](
-                    object_embedded_reshaped, neighbor_embedded_reshaped, neighbor_embedded_reshaped
-                )
-                
-                # Reshape back
-                attended_output = attended_output.view(batch_size, seq_len, -1)
-                neighbor_outputs.append(attended_output)
-            else:
-                # If no neighbors of this type, use zero padding
-                zero_output = torch.zeros(batch_size, seq_len, self.d_model, device=object_state.device)
-                neighbor_outputs.append(zero_output)
-        
-        # Concatenate outputs from all neighbor types
-        combined_output = torch.cat(neighbor_outputs, dim=-1)
-        
-        # Project to final output dimension
-        output = self.output_projection(combined_output)
+        # Reshape back
+        output = attended_output.view(batch_size, seq_len, -1)
         
         return output
 
