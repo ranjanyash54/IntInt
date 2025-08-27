@@ -90,108 +90,59 @@ class DirectionalAttention(nn.Module):
         
         return output, attention_weights
 
-class TeacherForcingDecoder(nn.Module):
-    """Decoder with teacher forcing for prediction horizon."""
+class TemporalDecoder(nn.Module):
+    """Temporal decoder that applies directional attention to the last timestep."""
     
-    def __init__(self, d_model: int, num_heads: int, prediction_horizon: int, 
-                 teacher_forcing_ratio: float = 0.5, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int, prediction_horizon: int, dropout: float = 0.1):
         super().__init__()
         self.d_model = d_model
         self.prediction_horizon = prediction_horizon
-        self.teacher_forcing_ratio = teacher_forcing_ratio
-        self.initial_teacher_forcing_ratio = teacher_forcing_ratio
         
-        # Temporal encoding
+        # Temporal encoding for sequence positions
         self.temporal_encoding = TemporalEncoding(d_model)
         
         # Directional attention for temporal correlation
         self.directional_attention = DirectionalAttention(d_model, num_heads, dropout)
         
         # Output projection
-        self.output_projection = nn.Linear(d_model, 8)
-        
-        # Input embedding for predictions/ground truth
-        self.input_embedding = nn.Linear(8, d_model)
+        self.output_projection = nn.Linear(d_model, prediction_horizon * 8)
         
         # Layer normalization
         self.layer_norm = nn.LayerNorm(d_model)
-        
-        # Causal mask for autoregressive attention
-        self.register_buffer('causal_mask', self._create_causal_mask(prediction_horizon))
     
-    def _create_causal_mask(self, seq_len: int) -> torch.Tensor:
-        """Create causal mask for autoregressive attention."""
-        mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1)
-        return mask.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, seq_len]
-    
-    def forward(self, encoded_sequence: torch.Tensor, target_sequence: Optional[torch.Tensor] = None,
-                training: bool = True) -> torch.Tensor:
+    def forward(self, encoded_sequence: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass with teacher forcing.
+        Forward pass with directional attention on last timestep.
         
         Args:
             encoded_sequence: [batch_size, seq_len, d_model] - Encoded input sequence
-            target_sequence: [batch_size, prediction_horizon, 8] - Target sequence for teacher forcing
-            training: Whether in training mode
         
         Returns:
             Predicted sequence: [batch_size, prediction_horizon, 8]
         """
-        batch_size = encoded_sequence.size(0)
-        device = encoded_sequence.device
+        batch_size, seq_len, _ = encoded_sequence.shape
         
-        # Initialize predictions
-        predictions = []
-        current_input = encoded_sequence[:, -1:, :]  # Start with last encoded state
+        # Add temporal encoding to the entire sequence
+        encoded_sequence = self.temporal_encoding(encoded_sequence)
         
-        for step in range(self.prediction_horizon):
-            # Add temporal encoding
-            temporal_input = self.temporal_encoding(current_input)
-            
-            # Apply directional attention to get temporal correlation
-            attended_output, _ = self.directional_attention(
-                temporal_input, 
-                encoded_sequence, 
-                encoded_sequence,
-                causal_mask=self.causal_mask[:, :, :temporal_input.size(1), :encoded_sequence.size(1)]
-            )
-            
-            # Layer normalization
-            attended_output = self.layer_norm(attended_output)
-            
-            # Project to output
-            step_prediction = self.output_projection(attended_output)  # [batch_size, 1, 8]
-            predictions.append(step_prediction)
-            
-            # Prepare next input based on teacher forcing
-            if training and target_sequence is not None and torch.rand(1).item() < self.teacher_forcing_ratio:
-                # Use ground truth for next step
-                next_input = target_sequence[:, step:step+1, :]
-                # Embed the ground truth for next iteration
-                current_input = self.input_embedding(next_input)
-            else:
-                # Use predicted output for next step
-                current_input = self.input_embedding(step_prediction)
+        # Extract the last timestep as query
+        last_timestep = encoded_sequence[:, -1:, :]  # [batch_size, 1, d_model]
         
-        # Concatenate all predictions
-        output = torch.cat(predictions, dim=1)  # [batch_size, prediction_horizon, 8]
+        # Use the entire sequence as key and value for attention
+        attended_output, _ = self.directional_attention(
+            last_timestep, 
+            encoded_sequence, 
+            encoded_sequence
+        )
+        
+        # Add residual connection and layer normalization
+        attended_output = self.layer_norm(attended_output + last_timestep)
+        
+        # Project to output
+        output = self.output_projection(attended_output)  # [batch_size, 1, prediction_horizon * 8]
+        output = output.view(batch_size, self.prediction_horizon, 8)  # [batch_size, prediction_horizon, 8]
         
         return output
-    
-    def update_teacher_forcing_ratio(self, epoch: int, total_epochs: int, min_ratio: float = 0.0):
-        """
-        Gradually phase out teacher forcing during training.
-        
-        Args:
-            epoch: Current epoch
-            total_epochs: Total number of epochs
-            min_ratio: Minimum teacher forcing ratio (default: 0.0)
-        """
-        progress = epoch / total_epochs
-        self.teacher_forcing_ratio = max(
-            min_ratio,
-            self.initial_teacher_forcing_ratio * (1 - progress)
-        )
 
 class MultiHeadAttention(nn.Module):
     """Multi-head self-attention mechanism as described in 'Attention is All You Need'."""
@@ -359,23 +310,11 @@ class TrafficPredictionModel(nn.Module):
                 self.d_model, self.num_spatial_heads, self.neighbor_types, self.dropout
             ),
             
-            # Temporal processing layers
-            'temporal_layers': nn.ModuleList([
-                nn.TransformerEncoderLayer(
-                    d_model=self.d_model,
-                    nhead=self.num_heads,
-                    dim_feedforward=self.d_model * 4,
-                    dropout=self.dropout,
-                    batch_first=True
-                ) for _ in range(self.num_layers)
-            ]),
-            
-            # Teacher forcing decoder for prediction horizon
-            'teacher_forcing_decoder': TeacherForcingDecoder(
+            # Temporal decoder for prediction horizon
+            'temporal_decoder': TemporalDecoder(
                 d_model=self.d_model,
-                num_heads=self.num_heads,
+                num_heads=self.num_spatial_heads,
                 prediction_horizon=self.prediction_horizon,
-                teacher_forcing_ratio=0.5,
                 dropout=self.dropout
             ),
             
@@ -412,17 +351,14 @@ class TrafficPredictionModel(nn.Module):
     
     
     def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
-                entity_type: str, target_sequence: Optional[torch.Tensor] = None, target_neighbor_tensor: Optional[torch.Tensor] = None,
-                training: bool = True) -> torch.Tensor:
+                entity_type: str) -> torch.Tensor:
         """
-        Forward pass for traffic prediction with teacher forcing.
+        Forward pass for traffic prediction.
         
         Args:
             input_tensor: [batch_size, seq_len, 8] - Input sequence
             neighbor_tensor: [batch_size, seq_len, total_neighbor_features] - Neighbor features
             entity_type: 'vehicle' or 'pedestrian'
-            target_sequence: [batch_size, prediction_horizon, 8] - Target sequence for teacher forcing
-            training: Whether in training mode
         
         Returns:
             Predicted trajectory: [batch_size, prediction_horizon, 8]
@@ -459,24 +395,18 @@ class TrafficPredictionModel(nn.Module):
         # Apply layer normalization
         embedded = model['layer_norm'](embedded)
         
-        # Apply temporal processing layers
-        for temporal_layer in model['temporal_layers']:
-            embedded = temporal_layer(embedded)
-        
-        # Use teacher forcing decoder for prediction horizon
-        output = model['teacher_forcing_decoder'](embedded, target_sequence, training)
+        # Use temporal decoder for prediction horizon
+        output = model['temporal_decoder'](embedded)
         
         return output
     
-    def predict_vehicle(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, 
-                       target_sequence: Optional[torch.Tensor] = None, training: bool = True) -> torch.Tensor:
-        """Predict vehicle trajectory with teacher forcing."""
-        return self.forward(input_tensor, neighbor_tensor, 'vehicle', target_sequence, training)
+    def predict_vehicle(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor) -> torch.Tensor:
+        """Predict vehicle trajectory."""
+        return self.forward(input_tensor, neighbor_tensor, 'vehicle')
     
-    def predict_pedestrian(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
-                          target_sequence: Optional[torch.Tensor] = None, training: bool = True) -> torch.Tensor:
-        """Predict pedestrian trajectory with teacher forcing."""
-        return self.forward(input_tensor, neighbor_tensor, 'pedestrian', target_sequence, training)
+    def predict_pedestrian(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor) -> torch.Tensor:
+        """Predict pedestrian trajectory."""
+        return self.forward(input_tensor, neighbor_tensor, 'pedestrian')
 
 class TrafficPredictor:
     """High-level wrapper for traffic prediction."""
@@ -492,7 +422,7 @@ class TrafficPredictor:
     def train_step(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
                    target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor, entity_type: str, 
                    optimizer: torch.optim.Optimizer, criterion: nn.Module) -> float:
-        """Perform one training step with teacher forcing."""
+        """Perform one training step."""
         self.model.train()
         
         # Move to device
@@ -501,9 +431,9 @@ class TrafficPredictor:
         target_tensor = target_tensor.to(self.device)
         target_neighbor_tensor = target_neighbor_tensor.to(self.device)
         
-        # Forward pass with teacher forcing
+        # Forward pass
         optimizer.zero_grad()
-        predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, target_tensor, target_neighbor_tensor, training=True)
+        predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type)
         
         # Calculate loss
         loss = criterion(predictions, target_tensor)
@@ -517,7 +447,7 @@ class TrafficPredictor:
     def validate(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
                  target_tensor: torch.Tensor, entity_type: str, 
                  criterion: nn.Module) -> float:
-        """Perform validation without teacher forcing."""
+        """Perform validation."""
         self.model.eval()
         
         with torch.no_grad():
@@ -526,8 +456,8 @@ class TrafficPredictor:
             neighbor_tensor = neighbor_tensor.to(self.device)
             target_tensor = target_tensor.to(self.device)
             
-            # Forward pass without teacher forcing
-            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, training=False)
+            # Forward pass
+            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type)
             
             # Calculate loss
             loss = criterion(predictions, target_tensor)
@@ -536,7 +466,7 @@ class TrafficPredictor:
     
     def predict(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
                 entity_type: str) -> torch.Tensor:
-        """Make predictions without teacher forcing."""
+        """Make predictions."""
         self.model.eval()
         
         with torch.no_grad():
@@ -544,8 +474,8 @@ class TrafficPredictor:
             input_tensor = input_tensor.to(self.device)
             neighbor_tensor = neighbor_tensor.to(self.device)
             
-            # Forward pass without teacher forcing
-            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, training=False)
+            # Forward pass
+            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type)
             
             return predictions
     
