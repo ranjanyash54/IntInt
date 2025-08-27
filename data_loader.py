@@ -77,15 +77,17 @@ class TrafficDataset(Dataset):
         for t in range(time - self.sequence_length + 1, time + 1):
             # Get entity data for current object
             entity_data = scene.get_entity_data(t, object_id)
+            entity_type = entity_data['vehicle_type']
+            entity_string = 'vehicle' if entity_type == 0 else 'pedestrian'
             if entity_data is None:
                 # Use zero padding if data is missing
                 features = [0.0] * 8  # x, y, vx, vy, ax, ay, theta, vehicle_type
             else:
                 features = [
-                    0.0, 0.0,
-                    0.0, 0.0,
+                    entity_data['x'], entity_data['y'],
+                    entity_data['vx'], entity_data['vy'],
                     entity_data['ax'], entity_data['ay'],
-                    0.0
+                    entity_data['theta'], entity_data['vehicle_type']
                 ]
             input_sequence.append(features)
             
@@ -131,23 +133,24 @@ class TrafficDataset(Dataset):
     def _get_neighbors_features(self, scene, object_id: int, time: int, future: bool = False) -> Dict[str, List[List[float]]]:
         """Get features for neighbors of the given object at the specified time, organized by type."""
         neighbor_features = {}
-        
+        entity_type = scene.get_entity_data(time, object_id)['vehicle_type']
+        entity_string = 'veh' if entity_type == 0 else 'ped'
         # Get entity data for normalization
         entity_data = scene.get_entity_data(time, object_id)
         if entity_data is None:
             # If entity data is missing, use zeros for normalization
             entity_x, entity_y, entity_vx, entity_vy, entity_theta = 0.0, 0.0, 0.0, 0.0, 0.0
+            # Default to vehicle type if entity data is missing
+            entity_type = 0.0
         else:
             entity_x, entity_y = entity_data['x'], entity_data['y']
             entity_vx, entity_vy = entity_data['vx'], entity_data['vy']
             entity_theta = entity_data['theta']
+            entity_type = entity_data['vehicle_type']
         
-        # Get all neighbor types
-        neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
+        neighbor_types = self.environment.neighbor_type[entity_string]
         
         for neighbor_type in neighbor_types:
-            neighbor_features[neighbor_type] = []
-            
             # Get neighbors for this type
             neighbors = scene.get_neighbors(time, object_id, neighbor_type)
             
@@ -160,26 +163,15 @@ class TrafficDataset(Dataset):
                 if neighbor_data is not None:
                     # Normalize neighbor features relative to entity
                     # Position: relative to entity position
-                    if future:
-                        rel_x = neighbor_data['x']
-                        rel_y = neighbor_data['y']
-                    else:
-                        rel_x = neighbor_data['x'] - entity_x
-                        rel_y = neighbor_data['y'] - entity_y
+                    rel_x = neighbor_data['x']
+                    rel_y = neighbor_data['y']
                     
                     # Velocity: relative to entity velocity
-                    if future:
-                        rel_vx = neighbor_data['vx']
-                        rel_vy = neighbor_data['vy']
-                    else:
-                        rel_vx = neighbor_data['vx'] - entity_vx
-                        rel_vy = neighbor_data['vy'] - entity_vy
+                    rel_vx = neighbor_data['vx']
+                    rel_vy = neighbor_data['vy']
 
                     # Orientation: relative to entity orientation
-                    if future:
-                        rel_theta = neighbor_data['theta']
-                    else:
-                        rel_theta = neighbor_data['theta'] - entity_theta
+                    rel_theta = neighbor_data['theta']
                     
                     features = [
                         rel_x, rel_y,           # Relative position
@@ -195,6 +187,7 @@ class TrafficDataset(Dataset):
             # Pad with zeros if we have fewer than max_nbr neighbors
             while len(neighbor_features[neighbor_type]) < self.max_nbr:
                 neighbor_features[neighbor_type].append([0.0] * 5)
+
         
         return neighbor_features
 
