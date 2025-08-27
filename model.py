@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import Dict, List, Tuple, Optional
 import logging
 import math
-
+from environment import Environment
 logger = logging.getLogger(__name__)
 
 class TemporalEncoding(nn.Module):
@@ -336,12 +336,12 @@ class NeighborAttentionLayer(nn.Module):
 class TrafficPredictionModel(nn.Module):
     """Main traffic prediction model with separate models for vehicles and pedestrians."""
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, train_env: Environment, val_env: Environment):
         super().__init__()
         
         # Model configuration
         self.d_model = config.get('d_model', 128)
-        self.num_heads = config.get('num_heads', 8)
+        self.num_spatial_heads = config.get('num_spatial_heads', 8)
         self.num_layers = config.get('num_layers', 4)
         self.dropout = config.get('dropout', 0.1)
         self.sequence_length = config.get('sequence_length', 10)
@@ -351,30 +351,42 @@ class TrafficPredictionModel(nn.Module):
         # Check if pedestrian data is available
         self.has_pedestrian_data = config.get('has_pedestrian_data', True)
         
-        # Neighbor types - adjust based on available data
-        if self.has_pedestrian_data:
-            self.neighbor_types = ['veh-veh', 'veh-ped', 'ped-veh', 'ped-ped']
-        else:
-            self.neighbor_types = ['veh-veh']  # Only vehicle-vehicle interactions
+        # Neighbor types - always include all possible types for tensor consistency
+        # The data loader will handle filtering based on object type
+        self.object_types = train_env.object_type
+        self.neighbor_types = train_env.neighbor_type
         
         # Create models based on available data
         self.models = nn.ModuleDict({
-            'vehicle_model': self._create_entity_model('vehicle')
+            'veh': self._create_entity_model('veh')
+        })
+
+        self.neighbor_models = nn.ModuleDict({
+            'veh-veh': self._create_neighbor_model('veh-veh'),
+            'veh-ped': self._create_neighbor_model('veh-ped'),
+            'ped-veh': self._create_neighbor_model('ped-veh'),
+            'ped-ped': self._create_neighbor_model('ped-ped')
         })
         
         # Only create pedestrian model if pedestrian data is available
         if self.has_pedestrian_data:
-            self.models['pedestrian_model'] = self._create_entity_model('pedestrian')
+            self.models['ped'] = self._create_entity_model('ped')
         
         logger.info(f"Created TrafficPredictionModel with:")
         logger.info(f"  d_model: {self.d_model}")
-        logger.info(f"  num_heads: {self.num_heads}")
+        logger.info(f"  num_spatial_heads: {self.num_spatial_heads}")
         logger.info(f"  num_layers: {self.num_layers}")
         logger.info(f"  sequence_length: {self.sequence_length}")
         logger.info(f"  prediction_horizon: {self.prediction_horizon}")
         logger.info(f"  Has pedestrian data: {self.has_pedestrian_data}")
         logger.info(f"  Neighbor types: {self.neighbor_types}")
     
+    def _create_neighbor_model(self, neighbor_type: str) -> nn.Module:
+        """Create a model for a specific neighbor type."""
+        return nn.ModuleDict({
+            'input_embedding': nn.Linear(8, self.d_model)
+        })
+
     def _create_entity_model(self, entity_type: str) -> nn.Module:
         """Create a model for a specific entity type (vehicle or pedestrian)."""
         return nn.ModuleDict({
@@ -383,7 +395,7 @@ class TrafficPredictionModel(nn.Module):
             
             # Neighbor attention layers
             'neighbor_attention': NeighborAttentionLayer(
-                self.d_model, self.num_heads, self.neighbor_types, self.dropout
+                self.d_model, self.num_spatial_heads, self.neighbor_types, self.dropout
             ),
             
             # Temporal processing layers
@@ -410,7 +422,7 @@ class TrafficPredictionModel(nn.Module):
             'layer_norm': nn.LayerNorm(self.d_model)
         })
     
-    def _process_neighbors(self, neighbor_tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def _process_neighbors(self, neighbor_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
         """
         Process neighbor tensor to separate different neighbor types.
         
@@ -428,17 +440,18 @@ class TrafficPredictionModel(nn.Module):
         # Reshape to separate neighbor types
         # Each neighbor type has max_nbr neighbors, each with 5 features
         neighbor_tensor_reshaped = neighbor_tensor.view(
-            batch_size, seq_len, len(self.neighbor_types), neighbors_per_type, features_per_neighbor
+            batch_size, seq_len, len(self.neighbor_types[entity_type]), neighbors_per_type, features_per_neighbor
         )
         
-        neighbor_features = {}
-        for i, neighbor_type in enumerate(self.neighbor_types):
-            neighbor_features[neighbor_type] = neighbor_tensor_reshaped[:, :, i, :, :]
+        # neighbor_features = {}
+        # for i, neighbor_type in enumerate(self.neighbor_types):
+        #     neighbor_features[neighbor_type] = neighbor_tensor_reshaped[:, :, i, :, :]
         
-        return neighbor_features
+        return neighbor_tensor_reshaped
     
-    def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, 
-                entity_type: str, target_sequence: Optional[torch.Tensor] = None,
+    
+    def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
+                entity_type: str, target_sequence: Optional[torch.Tensor] = None, target_neighbor_tensor: Optional[torch.Tensor] = None,
                 training: bool = True) -> torch.Tensor:
         """
         Forward pass for traffic prediction with teacher forcing.
@@ -453,7 +466,7 @@ class TrafficPredictionModel(nn.Module):
         Returns:
             Predicted trajectory: [batch_size, prediction_horizon, 8]
         """
-        model_key = f'{entity_type}_model'
+        model_key = f'{entity_type}'
         if model_key not in self.models:
             raise ValueError(f"Model for entity type '{entity_type}' not found. Available models: {list(self.models.keys())}")
         
@@ -463,10 +476,21 @@ class TrafficPredictionModel(nn.Module):
         embedded = model['input_embedding'](input_tensor)  # [batch_size, seq_len, d_model]
         
         # Process neighbors
-        neighbor_features = self._process_neighbors(neighbor_tensor)
+        neighbor_features = self._process_neighbors(neighbor_tensor, entity_type) # [batch_size, seq_len, len(neighbor_types), neighbors_per_type, features_per_neighbor]
         
         # Apply neighbor attention
-        neighbor_attended = model['neighbor_attention'](embedded, neighbor_features)
+        neighbor_types = self.neighbor_types[entity_type]
+        i = 0
+        neighbor_embedded = []
+        for neighbor_type in neighbor_types:
+            neighbor_model = self.neighbor_models[neighbor_type]
+            neighbor_type_tensor = neighbor_features[:, :, i, :, :]
+            neighbor_type_embedded = neighbor_model['input_embedding'](neighbor_type_tensor)
+            neighbor_embedded.append(neighbor_type_embedded)
+            i += 1
+        neighbor_embedded = torch.cat(neighbor_embedded, dim=-1)
+        
+        neighbor_attended = model['neighbor_attention'](embedded, neighbor_embedded)
         
         # Add residual connection
         embedded = embedded + neighbor_attended
@@ -496,9 +520,9 @@ class TrafficPredictionModel(nn.Module):
 class TrafficPredictor:
     """High-level wrapper for traffic prediction."""
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, train_env: Environment, val_env: Environment):
         self.config = config
-        self.model = TrafficPredictionModel(config)
+        self.model = TrafficPredictionModel(config, train_env, val_env)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
         
@@ -518,7 +542,7 @@ class TrafficPredictor:
         
         # Forward pass with teacher forcing
         optimizer.zero_grad()
-        predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, target_tensor, training=True)
+        predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, target_tensor, target_neighbor_tensor, training=True)
         
         # Calculate loss
         loss = criterion(predictions, target_tensor)

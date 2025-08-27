@@ -182,7 +182,7 @@ def main():
         config['has_pedestrian_data'] = False
         logger.info("Model configured for vehicle-only training")
     
-    predictor = TrafficPredictor(config)
+    predictor = TrafficPredictor(config, train_env, val_env)
     
     # Log device information
     logger.info(f"CUDA available: {torch.cuda.is_available()}")

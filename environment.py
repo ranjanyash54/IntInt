@@ -30,6 +30,17 @@ class Environment:
         self.scene_count: int = 0
         self.total_timesteps: int = 0
         self.total_objects: int = 0
+        self.object_type = {
+            "veh": 0,
+            "ped": 1
+        }
+        # For each object_type, create neighbor types like vehicle_vehicle, vehicle_pedestrian, etc.
+        self.neighbor_type = {}
+        for obj_type in self.object_type:
+            self.neighbor_type[obj_type] = []
+            for other_type in self.object_type:
+                neighbor = f"{obj_type}-{other_type}"
+                self.neighbor_type[obj_type].append(neighbor)
         
         # Load all scenes from the folder
         self._load_scenes()
