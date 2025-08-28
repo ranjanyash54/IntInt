@@ -91,58 +91,144 @@ class DirectionalAttention(nn.Module):
         return output, attention_weights
 
 class TemporalDecoder(nn.Module):
-    """Temporal decoder that applies directional attention to the last timestep."""
+    """Temporal decoder that applies spatial attention and directional attention for each prediction timestep."""
     
-    def __init__(self, d_model: int, num_heads: int, prediction_horizon: int, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int, prediction_horizon: int, sequence_length: int, 
+                 max_nbr: int, neighbor_types: List[str], dropout: float = 0.1):
         super().__init__()
         self.d_model = d_model
         self.prediction_horizon = prediction_horizon
+        self.sequence_length = sequence_length
+        self.max_nbr = max_nbr
+        self.neighbor_types = neighbor_types
         
         # Temporal encoding for sequence positions
         self.temporal_encoding = TemporalEncoding(d_model)
         
+        # Spatial attention for neighbors
+        self.spatial_attention = MultiHeadAttention(d_model, num_heads, dropout)
+        
         # Directional attention for temporal correlation
         self.directional_attention = DirectionalAttention(d_model, num_heads, dropout)
         
-        # Output projection
-        self.output_projection = nn.Linear(d_model, prediction_horizon * 8)
+        # Output projection for Gaussian parameters (mean and variance for ax, ay)
+        # For each timestep: [ax_mean, ay_mean, ax_var, ay_var] = 4 parameters
+        self.output_projection = nn.Linear(d_model, 4)
         
         # Layer normalization
         self.layer_norm = nn.LayerNorm(d_model)
+        
+        # Neighbor embedding for ground truth values
+        self.neighbor_embedding = nn.Linear(8, d_model)
     
-    def forward(self, encoded_sequence: torch.Tensor) -> torch.Tensor:
+    def forward(self, encoded_sequence: torch.Tensor, 
+                target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
         """
-        Forward pass with directional attention on last timestep.
+        Forward pass with spatial and directional attention for each prediction timestep.
         
         Args:
             encoded_sequence: [batch_size, seq_len, d_model] - Encoded input sequence
+            target_tensor: [batch_size, prediction_horizon, 8] - Ground truth for future timesteps
+            target_neighbor_tensor: [batch_size, prediction_horizon, total_neighbor_features] - Neighbor features for future timesteps
+            entity_type: 'vehicle' or 'pedestrian'
         
         Returns:
-            Predicted sequence: [batch_size, prediction_horizon, 8]
+            Gaussian parameters: [batch_size, prediction_horizon, 4] 
+            where 4 = [ax_mean, ay_mean, ax_var, ay_var]
         """
         batch_size, seq_len, _ = encoded_sequence.shape
         
-        # Add temporal encoding to the entire sequence
-        encoded_sequence = self.temporal_encoding(encoded_sequence)
+        # Process neighbors for future timesteps
+        future_neighbor_features = self._process_neighbors(target_neighbor_tensor)
         
-        # Extract the last timestep as query
-        last_timestep = encoded_sequence[:, -1:, :]  # [batch_size, 1, d_model]
+        # Initialize output tensor
+        outputs = []
+        current_state = target_tensor[:, 0, :]
+        state_model = self.models[entity_type]
         
-        # Use the entire sequence as key and value for attention
-        attended_output, _ = self.directional_attention(
-            last_timestep, 
-            encoded_sequence, 
-            encoded_sequence
-        )
+        # For each prediction timestep
+        for t in range(self.prediction_horizon):
+            # Get ground truth for current timestep
+            embedded = state_model['input_embedding'](current_state)
+
+            neighbor_features = future_neighbor_features[:, t, :, :]
+            
+            # Apply spatial attention over future neighbors using ground truth
+            neighbor_types = self.neighbor_types[entity_type]
+            i = 0
+            neighbor_embedded = []
+            for neighbor_type in neighbor_types:
+                neighbor_model = self.neighbor_models[neighbor_type]
+                neighbor_type_tensor = neighbor_features[:, :, i, :, :]
+                neighbor_type_embedded = neighbor_model['input_embedding'](neighbor_type_tensor)
+                neighbor_embedded.append(neighbor_type_embedded)
+                i += 1
+            
+            neighbor_embedded = torch.cat(neighbor_embedded, dim=-1)  # [batch_size, total_nbr, d_model]
+            
+            # Spatial attention: ground truth as query, future neighbors as key and value
+            spatial_attended, _ = self.spatial_attention(
+                embedded, neighbor_embedded, neighbor_embedded
+            )
+            
+            # Get the last sequence_length timesteps for directional attention
+            last_sequence = encoded_sequence[:, -self.sequence_length:, :]  # [batch_size, sequence_length, d_model]
+            
+            last_sequence = self.temporal_encoding(last_sequence)
+            embedded = self.temporal_encoding(embedded)
+            
+            # Apply directional attention over the last sequence_length timesteps with temporal encoding
+            temporal_attended, _ = self.directional_attention(
+                spatial_attended, last_sequence, last_sequence
+            )
+            
+            # Add residual connection and layer normalization
+            attended_output = self.layer_norm(temporal_attended + spatial_attended)
+            
+            # Project to Gaussian parameters for this timestep
+            timestep_output = self.output_projection(attended_output)  # [batch_size, 1, 4]
+            
+            # Ensure variance is positive by applying softplus
+            ax_mean = timestep_output[:, :, 0:1]  # [batch_size, 1, 1]
+            ay_mean = timestep_output[:, :, 1:2]  # [batch_size, 1, 1]
+            ax_var = F.softplus(timestep_output[:, :, 2:3])  # [batch_size, 1, 1]
+            ay_var = F.softplus(timestep_output[:, :, 3:4])  # [batch_size, 1, 1]
+            
+            # Concatenate parameters for this timestep
+            timestep_params = torch.cat([ax_mean, ay_mean, ax_var, ay_var], dim=-1)  # [batch_size, 1, 4]
+            outputs.append(timestep_params)
+
+            current_state = target_tensor[:, t+1, :]
         
-        # Add residual connection and layer normalization
-        attended_output = self.layer_norm(attended_output + last_timestep)
-        
-        # Project to output
-        output = self.output_projection(attended_output)  # [batch_size, 1, prediction_horizon * 8]
-        output = output.view(batch_size, self.prediction_horizon, 8)  # [batch_size, prediction_horizon, 8]
+        # Concatenate all timesteps
+        output = torch.cat(outputs, dim=1)  # [batch_size, prediction_horizon, 4]
         
         return output
+    
+    def _process_neighbors(self, neighbor_tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Process neighbor tensor to separate different neighbor types.
+        
+        Args:
+            neighbor_tensor: [batch_size, seq_len, total_neighbor_features]
+        
+        Returns:
+            Dict with neighbor type as key and features as value
+        """
+        batch_size, seq_len, _ = neighbor_tensor.shape
+        features_per_neighbor = 5
+        neighbors_per_type = self.max_nbr
+        
+        # Reshape to separate neighbor types
+        neighbor_tensor_reshaped = neighbor_tensor.view(
+            batch_size, seq_len, len(self.neighbor_types), neighbors_per_type, features_per_neighbor
+        )
+        
+        neighbor_features = {}
+        for i, neighbor_type in enumerate(self.neighbor_types):
+            neighbor_features[neighbor_type] = neighbor_tensor_reshaped[:, :, i, :, :]
+        
+        return neighbor_features
 
 class MultiHeadAttention(nn.Module):
     """Multi-head self-attention mechanism as described in 'Attention is All You Need'."""
@@ -315,6 +401,9 @@ class TrafficPredictionModel(nn.Module):
                 d_model=self.d_model,
                 num_heads=self.num_spatial_heads,
                 prediction_horizon=self.prediction_horizon,
+                sequence_length=self.sequence_length,
+                max_nbr=self.max_nbr,
+                neighbor_types=self.neighbor_types,
                 dropout=self.dropout
             ),
             
@@ -351,7 +440,7 @@ class TrafficPredictionModel(nn.Module):
     
     
     def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
-                entity_type: str) -> torch.Tensor:
+                entity_type: str, target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor) -> torch.Tensor:
         """
         Forward pass for traffic prediction.
         
@@ -396,17 +485,19 @@ class TrafficPredictionModel(nn.Module):
         embedded = model['layer_norm'](embedded)
         
         # Use temporal decoder for prediction horizon
-        output = model['temporal_decoder'](embedded)
+        output = model['temporal_decoder'](embedded, target_tensor, target_neighbor_tensor, entity_type)
         
         return output
     
-    def predict_vehicle(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor) -> torch.Tensor:
+    def predict_vehicle(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, 
+                       target_sequence: torch.Tensor, target_neighbor_tensor: torch.Tensor) -> torch.Tensor:
         """Predict vehicle trajectory."""
-        return self.forward(input_tensor, neighbor_tensor, 'vehicle')
+        return self.forward(input_tensor, neighbor_tensor, 'vehicle', target_sequence, target_neighbor_tensor)
     
-    def predict_pedestrian(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor) -> torch.Tensor:
+    def predict_pedestrian(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
+                          target_sequence: torch.Tensor, target_neighbor_tensor: torch.Tensor) -> torch.Tensor:
         """Predict pedestrian trajectory."""
-        return self.forward(input_tensor, neighbor_tensor, 'pedestrian')
+        return self.forward(input_tensor, neighbor_tensor, 'pedestrian', target_sequence, target_neighbor_tensor)
 
 class TrafficPredictor:
     """High-level wrapper for traffic prediction."""
@@ -433,7 +524,7 @@ class TrafficPredictor:
         
         # Forward pass
         optimizer.zero_grad()
-        predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type)
+        predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, target_tensor, target_neighbor_tensor)
         
         # Calculate loss
         loss = criterion(predictions, target_tensor)
@@ -445,7 +536,7 @@ class TrafficPredictor:
         return loss.item()
     
     def validate(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
-                 target_tensor: torch.Tensor, entity_type: str, 
+                 target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor, entity_type: str, 
                  criterion: nn.Module) -> float:
         """Perform validation."""
         self.model.eval()
@@ -455,9 +546,10 @@ class TrafficPredictor:
             input_tensor = input_tensor.to(self.device)
             neighbor_tensor = neighbor_tensor.to(self.device)
             target_tensor = target_tensor.to(self.device)
+            target_neighbor_tensor = target_neighbor_tensor.to(self.device)
             
             # Forward pass
-            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type)
+            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, target_tensor, target_neighbor_tensor)
             
             # Calculate loss
             loss = criterion(predictions, target_tensor)
@@ -465,7 +557,7 @@ class TrafficPredictor:
             return loss.item()
     
     def predict(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
-                entity_type: str) -> torch.Tensor:
+                entity_type: str, target_sequence: torch.Tensor, target_neighbor_sequence: torch.Tensor) -> torch.Tensor:
         """Make predictions."""
         self.model.eval()
         
@@ -473,9 +565,11 @@ class TrafficPredictor:
             # Move to device
             input_tensor = input_tensor.to(self.device)
             neighbor_tensor = neighbor_tensor.to(self.device)
+            target_sequence = target_sequence.to(self.device)
+            target_neighbor_sequence = target_neighbor_sequence.to(self.device)
             
             # Forward pass
-            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type)
+            predictions = self.model.forward(input_tensor, neighbor_tensor, entity_type, target_sequence, target_neighbor_sequence)
             
             return predictions
     
