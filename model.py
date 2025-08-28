@@ -148,8 +148,13 @@ class TemporalDecoder(nn.Module):
         
         # For each prediction timestep
         for t in range(self.prediction_horizon):
+            # Normalize current state: set x, y, vx, vy, theta to 0, keep ax, ay, vehicle_type
+            normalized_current_state = current_state.clone()
+            normalized_current_state[:, [0, 1, 2, 3, 6]] = 0  # Set x, y, vx, vy, theta to 0
+            # Keep ax, ay, vehicle_type as they are
+            
             # Get ground truth for current timestep
-            embedded = state_model['input_embedding'](current_state)
+            embedded = state_model['input_embedding'](normalized_current_state)
 
             neighbor_features = future_neighbor_features[:, t, :, :]
             
@@ -160,7 +165,19 @@ class TemporalDecoder(nn.Module):
             for neighbor_type in neighbor_types:
                 neighbor_model = self.neighbor_models[neighbor_type]
                 neighbor_type_tensor = neighbor_features[:, :, i, :, :]
-                neighbor_type_embedded = neighbor_model['input_embedding'](neighbor_type_tensor)
+                
+                # Normalize neighbor features by subtracting object features
+                # Object features: [x, y, vx, vy, ax, ay, theta, vehicle_type] (8 features)
+                # Neighbor features: [x, y, vx, vy, theta] (5 features)
+                # We subtract the corresponding object features: [x, y, vx, vy, theta]
+                # Use original current_state (not normalized) for extracting object features
+                object_features = current_state[:, [0, 1, 2, 3, 6]]  # [x, y, vx, vy, theta]
+                object_features = object_features.unsqueeze(1).unsqueeze(1)  # [batch_size, 1, 1, 5]
+                
+                # Normalize neighbor features: neighbor - object
+                normalized_neighbor_tensor = neighbor_type_tensor - object_features
+                
+                neighbor_type_embedded = neighbor_model['input_embedding'](normalized_neighbor_tensor)
                 neighbor_embedded.append(neighbor_type_embedded)
                 i += 1
             
@@ -458,8 +475,14 @@ class TrafficPredictionModel(nn.Module):
         
         model = self.models[model_key]
         
+        # Normalize object state tensor: set x, y, vx, vy, theta to 0, keep ax, ay, vehicle_type
+        # Object features: [x, y, vx, vy, ax, ay, theta, vehicle_type]
+        normalized_input = input_tensor.clone()
+        normalized_input[:, :, [0, 1, 2, 3, 6]] = 0  # Set x, y, vx, vy, theta to 0
+        # Keep ax, ay, vehicle_type as they are
+        
         # Embed input features
-        embedded = model['input_embedding'](input_tensor)  # [batch_size, seq_len, d_model]
+        embedded = model['input_embedding'](normalized_input)  # [batch_size, seq_len, d_model]
         
         # Process neighbors
         neighbor_features = self._process_neighbors(neighbor_tensor, entity_type) # [batch_size, seq_len, len(neighbor_types), neighbors_per_type, features_per_neighbor]
@@ -471,7 +494,19 @@ class TrafficPredictionModel(nn.Module):
         for neighbor_type in neighbor_types:
             neighbor_model = self.neighbor_models[neighbor_type]
             neighbor_type_tensor = neighbor_features[:, :, i, :, :]
-            neighbor_type_embedded = neighbor_model['input_embedding'](neighbor_type_tensor)
+            
+            # Normalize neighbor features by subtracting object features
+            # Object features: [x, y, vx, vy, ax, ay, theta, vehicle_type] (8 features)
+            # Neighbor features: [x, y, vx, vy, theta] (5 features)
+            # We subtract the corresponding object features: [x, y, vx, vy, theta]
+            # Use original input_tensor (not normalized) for extracting object features
+            object_features = input_tensor[:, :, [0, 1, 2, 3, 6]]  # [batch_size, seq_len, 5] - [x, y, vx, vy, theta]
+            object_features = object_features.unsqueeze(2)  # [batch_size, seq_len, 1, 5]
+            
+            # Normalize neighbor features: neighbor - object
+            normalized_neighbor_tensor = neighbor_type_tensor - object_features
+            
+            neighbor_type_embedded = neighbor_model['input_embedding'](normalized_neighbor_tensor)
             neighbor_embedded.append(neighbor_type_embedded)
             i += 1
         neighbor_embedded = torch.cat(neighbor_embedded, dim=-1)
