@@ -81,18 +81,18 @@ class TrafficDataset(Dataset):
             entity_string = 'vehicle' if entity_type == 0 else 'pedestrian'
             if entity_data is None:
                 # Use zero padding if data is missing
-                features = [0.0] * 8  # x, y, vx, vy, ax, ay, theta, vehicle_type
+                features = [0.0] * 6  # x, y, vx, vy, theta, vehicle_type
             else:
                 features = [
                     entity_data['x'], entity_data['y'],
                     entity_data['vx'], entity_data['vy'],
-                    entity_data['ax'], entity_data['ay'],
                     entity_data['theta'], entity_data['vehicle_type']
                 ]
             input_sequence.append(features)
             
             # Get neighbors for this timestep
             neighbors_features_dict = self._get_neighbors_features(scene, object_id, t)
+            # TODO: Add neighbors and signal
             # Flatten the dictionary into a list for tensor conversion
             neighbors_features = self._flatten_neighbors_dict(neighbors_features_dict)
             neighbor_sequence.append(neighbors_features)
@@ -106,12 +106,11 @@ class TrafficDataset(Dataset):
             entity_data = scene.get_entity_data(t, object_id)
             if entity_data is None:
                 # Use zero padding if data is missing
-                features = [0.0] * 8  # x, y, vx, vy, ax, ay, theta, vehicle_type
+                features = [0.0] * 6  # x, y, vx, vy, theta, vehicle_type
             else:
                 features = [
                     entity_data['x'], entity_data['y'],
                     entity_data['vx'], entity_data['vy'],
-                    entity_data['ax'], entity_data['ay'],
                     entity_data['theta'], entity_data['vehicle_type']
                 ]
             target_sequence.append(features)
@@ -136,17 +135,6 @@ class TrafficDataset(Dataset):
         entity_type = scene.get_entity_data(time, object_id)['vehicle_type']
         entity_string = 'veh' if entity_type == 0 else 'ped'
         # Get entity data for normalization
-        entity_data = scene.get_entity_data(time, object_id)
-        if entity_data is None:
-            # If entity data is missing, use zeros for normalization
-            entity_x, entity_y, entity_vx, entity_vy, entity_theta = 0.0, 0.0, 0.0, 0.0, 0.0
-            # Default to vehicle type if entity data is missing
-            entity_type = 0.0
-        else:
-            entity_x, entity_y = entity_data['x'], entity_data['y']
-            entity_vx, entity_vy = entity_data['vx'], entity_data['vy']
-            entity_theta = entity_data['theta']
-            entity_type = entity_data['vehicle_type']
         
         neighbor_types = self.environment.neighbor_type[entity_string]
         

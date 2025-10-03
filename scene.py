@@ -26,6 +26,7 @@ class Scene:
         self.timesteps: int = 0
         self.unique_objects: int = 0
         self.vehicle_types: List[str] = []
+        self.center_point: Tuple[float, float] = (170.76, 296.75)
         
         # Vehicle and pedestrian data structures
         self.vehicles: Optional[pd.DataFrame] = None
@@ -280,30 +281,13 @@ class Scene:
                 entity_trajectory.loc[entity_trajectory.index[-1], 'vx'] = last_vx
                 entity_trajectory.loc[entity_trajectory.index[-1], 'vy'] = last_vy
             
-            # Calculate accelerations
-            entity_trajectory['ax'] = entity_trajectory['vx'].diff()
-            entity_trajectory['ay'] = entity_trajectory['vy'].diff()
-            
-            # Shift accelerations back by one row
-            entity_trajectory['ax'] = entity_trajectory['ax'].shift(-1)
-            entity_trajectory['ay'] = entity_trajectory['ay'].shift(-1)
-            
-            # Fill the last row with the last calculated acceleration
-            if len(entity_trajectory) > 2:
-                last_ax = entity_trajectory['ax'].iloc[-3]  # Third to last value
-                last_ay = entity_trajectory['ay'].iloc[-3]  # Third to last value
-                entity_trajectory.loc[entity_trajectory.index[-1], 'ax'] = last_ax
-                entity_trajectory.loc[entity_trajectory.index[-1], 'ay'] = last_ay
-            
             # Handle NaN values (first rows after shifting)
             entity_trajectory['vx'] = entity_trajectory['vx'].fillna(0.0)
             entity_trajectory['vy'] = entity_trajectory['vy'].fillna(0.0)
-            entity_trajectory['ax'] = entity_trajectory['ax'].fillna(0.0)
-            entity_trajectory['ay'] = entity_trajectory['ay'].fillna(0.0)
             
             # Update the original DataFrame
-            entity_df.loc[entity_df['id'] == entity_id, ['vx', 'vy', 'ax', 'ay']] = \
-                entity_trajectory[['vx', 'vy', 'ax', 'ay']].values
+            entity_df.loc[entity_df['id'] == entity_id, ['vx', 'vy']] = \
+                entity_trajectory[['vx', 'vy']].values
     
     def _create_entity_dictionary(self):
         """Create a dictionary with (time, id) as key and entity data as value."""
@@ -339,19 +323,15 @@ class Scene:
         for _, row in all_entities.iterrows():
             time_id = (int(row['time']), int(row['id']))
             
-            # Check if velocity and acceleration columns exist with safe defaults
+            # Check if velocity columns exist with safe defaults
             vx = row.get('vx', 0.0)
             vy = row.get('vy', 0.0)
-            ax = row.get('ax', 0.0)
-            ay = row.get('ay', 0.0)
             
             self.entity_data[time_id] = {
                 'x': float(row['x']),
                 'y': float(row['y']),
                 'vx': float(vx),
                 'vy': float(vy),
-                'ax': float(ax),
-                'ay': float(ay),
                 'theta': float(row['theta']),
                 'vehicle_type': float(row['vehicle_type'])
             }
