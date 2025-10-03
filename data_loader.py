@@ -81,12 +81,11 @@ class TrafficDataset(Dataset):
             entity_string = 'vehicle' if entity_type == 0 else 'pedestrian'
             if entity_data is None:
                 # Use zero padding if data is missing
-                features = [0.0] * 6  # x, y, vx, vy, theta, vehicle_type
+                features = [0.0] * 6  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
             else:
                 features = [
-                    entity_data['x'], entity_data['y'],
-                    entity_data['vx'], entity_data['vy'],
-                    entity_data['theta'], entity_data['vehicle_type']
+                    entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
+                    entity_data['tangent_sin'], entity_data['tangent_cos']
                 ]
             input_sequence.append(features)
             
@@ -106,12 +105,11 @@ class TrafficDataset(Dataset):
             entity_data = scene.get_entity_data(t, object_id)
             if entity_data is None:
                 # Use zero padding if data is missing
-                features = [0.0] * 6  # x, y, vx, vy, theta, vehicle_type
+                features = [0.0] * 6  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
             else:
                 features = [
-                    entity_data['x'], entity_data['y'],
-                    entity_data['vx'], entity_data['vy'],
-                    entity_data['theta'], entity_data['vehicle_type']
+                    entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
+                    entity_data['tangent_sin'], entity_data['tangent_cos']
                 ]
             target_sequence.append(features)
             
@@ -142,6 +140,7 @@ class TrafficDataset(Dataset):
             # Get neighbors for this type
             neighbors = scene.get_neighbors(time, object_id, neighbor_type)
             
+            # TODO: Sort neighbors by distance
             # Limit to max_nbr neighbors
             neighbors = neighbors[:self.max_nbr]
             
@@ -149,32 +148,26 @@ class TrafficDataset(Dataset):
             for neighbor_id in neighbors:
                 neighbor_data = scene.get_entity_data(time, neighbor_id)
                 if neighbor_data is not None:
-                    # Normalize neighbor features relative to entity
-                    # Position: relative to entity position
-                    rel_x = neighbor_data['x']
-                    rel_y = neighbor_data['y']
-                    
-                    # Velocity: relative to entity velocity
-                    rel_vx = neighbor_data['vx']
-                    rel_vy = neighbor_data['vy']
-
-                    # Orientation: relative to entity orientation
-                    rel_theta = neighbor_data['theta']
+                    nbr_r = neighbor_data['r']
+                    nbr_sin_theta = neighbor_data['sin_theta']
+                    nbr_cos_theta = neighbor_data['cos_theta']
+                    nbr_speed = neighbor_data['speed']
+                    nbr_tangent_sin = neighbor_data['tangent_sin']
+                    nbr_tangent_cos = neighbor_data['tangent_cos']
                     
                     features = [
-                        rel_x, rel_y,           # Relative position
-                        rel_vx, rel_vy,         # Relative velocity
-                        rel_theta,              # Relative orientation
+                        nbr_r, nbr_sin_theta, nbr_cos_theta, nbr_speed,
+                        nbr_tangent_sin, nbr_tangent_cos
                     ]
                 else:
                     # Zero padding for missing neighbor data
-                    features = [0.0] * 5
+                    features = [0.0] * 6
                 
                 neighbor_features[neighbor_type].append(features)
             
             # Pad with zeros if we have fewer than max_nbr neighbors
             while len(neighbor_features[neighbor_type]) < self.max_nbr:
-                neighbor_features[neighbor_type].append([0.0] * 5)
+                neighbor_features[neighbor_type].append([0.0] * 6)
 
         
         return neighbor_features
@@ -188,12 +181,6 @@ class TrafficDataset(Dataset):
             if neighbor_type in neighbors_dict:
                 for neighbor_features in neighbors_dict[neighbor_type]:
                     flattened.extend(neighbor_features)
-            else:
-                # Pad with zeros for missing neighbor types
-                max_nbr = 10  # Default max neighbors
-                features_per_neighbor = 5
-                for _ in range(max_nbr):
-                    flattened.extend([0.0] * features_per_neighbor)
         
         return flattened
 

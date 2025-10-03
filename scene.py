@@ -27,6 +27,7 @@ class Scene:
         self.unique_objects: int = 0
         self.vehicle_types: List[str] = []
         self.center_point: Tuple[float, float] = (170.76, 296.75)
+        self.dt = 0.1 # seconds
         
         # Vehicle and pedestrian data structures
         self.vehicles: Optional[pd.DataFrame] = None
@@ -322,14 +323,32 @@ class Scene:
         # Create dictionary entries
         for _, row in all_entities.iterrows():
             time_id = (int(row['time']), int(row['id']))
+            x = float(row['x'])
+            y = float(row['y'])
+            r = np.sqrt((x-self.center_point[0])**2 + (y-self.center_point[1])**2)
+            theta = np.arctan2(y-self.center_point[1], x-self.center_point[0])
+            sin_theta = np.sin(theta)
+            cos_theta = np.cos(theta)
+            vehicle_type = float(row['vehicle_type'])
             
             # Check if velocity columns exist with safe defaults
             vx = row.get('vx', 0.0)
             vy = row.get('vy', 0.0)
-            
+            speed = np.sqrt(vx**2 + vy**2)/self.dt
+            # If theta is not provided, use the tangent theta
+            tangent_theta = float(row['theta'])
+            tangent_sin = np.sin(tangent_theta)
+            tangent_cos = np.cos(tangent_theta)
+
             self.entity_data[time_id] = {
                 'x': float(row['x']),
                 'y': float(row['y']),
+                'r': float(r),
+                'sin_theta': float(sin_theta),
+                'cos_theta': float(cos_theta),
+                'speed': float(speed),
+                'tangent_sin': float(tangent_sin),
+                'tangent_cos': float(tangent_cos),
                 'vx': float(vx),
                 'vy': float(vy),
                 'theta': float(row['theta']),

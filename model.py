@@ -122,6 +122,11 @@ class TrafficPredictionModel(nn.Module):
         self.sequence_length = config.get('sequence_length', 10)
         self.prediction_horizon = config.get('prediction_horizon', 5)
         self.max_nbr = config.get('max_nbr', 10)
+
+        self.actor_encoder_input_size = config.get('actor_encoder_input_size', 6)
+        self.actor_encoder_output_size = config.get('actor_encoder_output_size', 128)
+        self.neighbor_encoder_input_size = config.get('neighbor_encoder_input_size', 6)
+        self.neighbor_encoder_output_size = config.get('neighbor_encoder_output_size', 128)
         
         # Check if pedestrian data is available
         self.has_pedestrian_data = config.get('has_pedestrian_data', True)
@@ -159,14 +164,14 @@ class TrafficPredictionModel(nn.Module):
     def _create_neighbor_model(self, neighbor_type: str) -> nn.Module:
         """Create a model for a specific neighbor type."""
         return nn.ModuleDict({
-            'input_embedding': nn.Linear(8, self.d_model)
+            'neighbor_encoder': nn.Linear(self.neighbor_encoder_input_size, self.neighbor_encoder_output_size)
         })
 
     def _create_entity_model(self, entity_type: str) -> nn.Module:
         """Create a model for a specific entity type (vehicle or pedestrian)."""
         return nn.ModuleDict({
             # Input embedding
-            'input_embedding': nn.Linear(8, self.d_model),
+            'actor_encoder': nn.Linear(self.actor_encoder_input_size, self.actor_encoder_output_size),
             
             # Neighbor attention layers
             'neighbor_attention': NeighborAttentionLayer(
@@ -192,7 +197,7 @@ class TrafficPredictionModel(nn.Module):
             Dict with neighbor type as key and features as value
         """
         batch_size, seq_len, _ = neighbor_tensor.shape
-        features_per_neighbor = 5
+        features_per_neighbor = self.neighbor_encoder_input_size
         neighbors_per_type = self.max_nbr
         
         # Reshape to separate neighbor types
@@ -200,10 +205,6 @@ class TrafficPredictionModel(nn.Module):
         neighbor_tensor_reshaped = neighbor_tensor.view(
             batch_size, seq_len, len(self.neighbor_types[entity_type]), neighbors_per_type, features_per_neighbor
         )
-        
-        # neighbor_features = {}
-        # for i, neighbor_type in enumerate(self.neighbor_types):
-        #     neighbor_features[neighbor_type] = neighbor_tensor_reshaped[:, :, i, :, :]
         
         return neighbor_tensor_reshaped
     
@@ -227,14 +228,10 @@ class TrafficPredictionModel(nn.Module):
         
         model = self.models[model_key]
         
-        # Normalize object state tensor: set x, y, vx, vy, theta to 0, keep ax, ay, vehicle_type
-        # Object features: [x, y, vx, vy, ax, ay, theta, vehicle_type]
-        normalized_input = input_tensor.clone()
-        normalized_input[:, :, [0, 1, 2, 3, 6]] = 0  # Set x, y, vx, vy, theta to 0
-        # Keep ax, ay, vehicle_type as they are
+        # TODO: Check if we need to add positional encoding to the input tensor (just like traffic bots did)
         
         # Embed input features
-        embedded = model['input_embedding'](normalized_input)  # [batch_size, seq_len, d_model]
+        embedded = model['actor_encoder'](input_tensor)  # [batch_size, seq_len, d_model]
         
         # Process neighbors
         neighbor_features = self._process_neighbors(neighbor_tensor, entity_type) # [batch_size, seq_len, len(neighbor_types), neighbors_per_type, features_per_neighbor]
@@ -247,10 +244,12 @@ class TrafficPredictionModel(nn.Module):
             neighbor_model = self.neighbor_models[neighbor_type]
             neighbor_type_tensor = neighbor_features[:, :, i, :, :]
             
-            neighbor_type_embedded = neighbor_model['input_embedding'](neighbor_type_tensor)
+            neighbor_type_embedded = neighbor_model['neighbor_encoder'](neighbor_type_tensor)
             neighbor_embedded.append(neighbor_type_embedded)
             i += 1
-        neighbor_embedded = torch.cat(neighbor_embedded, dim=-1)
+        neighbor_embedded = torch.stack(neighbor_embedded, dim=-2)
+
+        # TODO: Encoder lane polyline and signal
         
         for i in range(self.sequence_length):
             neighbor_embedded_at_t = neighbor_embedded[:, i, :, :]
