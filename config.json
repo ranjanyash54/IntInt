@@ -4,6 +4,17 @@
     "neighbor_encoder_input_size": 6,
     "neighbor_encoder_output_size": 128,
 
+    "spatial_attention_input_size": 128,
+    "spatial_attention_output_size": 128,
+    "spatial_attention_num_heads": 8,
+    "spatial_attention_dropout": 0.1,
+    "spatial_attention_num_layers": 4,
+    "spatial_attention_num_neighbors": 10,
+
+    "temporal_decoder_input_size": 128,
+    "temporal_decoder_output_size": 128,
+    "temporal_decoder_dropout": 0.1,
+
 
     "batch_size": 256,
     "learning_rate": 0.001,
