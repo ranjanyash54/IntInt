@@ -15,6 +15,8 @@
     "temporal_decoder_output_size": 128,
     "temporal_decoder_dropout": 0.1,
 
+    "actor_decoder_output_size": 3,
+
 
     "batch_size": 256,
     "learning_rate": 0.001,

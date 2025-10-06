@@ -33,6 +33,13 @@ class TrafficPredictionModel(nn.Module):
         self.spatial_attention_output_size = config.get('spatial_attention_output_size', 128)
         self.spatial_attention_num_heads = config.get('spatial_attention_num_heads', 8)
         self.spatial_attention_dropout = config.get('spatial_attention_dropout', 0.1)
+
+        self.temporal_decoder_input_size = config.get('temporal_decoder_input_size', 128)
+        self.temporal_decoder_output_size = config.get('temporal_decoder_output_size', 128)
+        self.temporal_decoder_dropout = config.get('temporal_decoder_dropout', 0.1)
+
+        self.actor_decoder_output_size = config.get('actor_decoder_output_size', 3)
+
         # Check if pedestrian data is available
         self.has_pedestrian_data = config.get('has_pedestrian_data', True)
         
@@ -80,11 +87,13 @@ class TrafficPredictionModel(nn.Module):
             
             # Neighbor attention layers
             'neighbor_attention': NeighborAttentionLayer(
-                self.spatial_attention_input_size, self.spatial_attention_num_heads, self.neighbor_types, self.spatial_attention_dropout
+                self.spatial_attention_input_size, self.spatial_attention_num_heads, self.spatial_attention_dropout
             ),
             
             # Temporal decoder for prediction horizon
             'temporal_decoder': nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout),
+
+            'actor_decoder': nn.Linear(self.temporal_decoder_output_size, self.actor_decoder_output_size),
 
         })
     
@@ -120,7 +129,9 @@ class TrafficPredictionModel(nn.Module):
         Args:
             input_tensor: [batch_size, seq_len, 8] - Input sequence
             neighbor_tensor: [batch_size, seq_len, total_neighbor_features] - Neighbor features
-            entity_type: 'vehicle' or 'pedestrian'
+            entity_type: 'veh' or 'ped'
+            target_tensor: [batch_size, prediction_horizon, 8] - Target sequence
+            target_neighbor_tensor: [batch_size, prediction_horizon, total_neighbor_features] - Target neighbor features
         
         Returns:
             Predicted trajectory: [batch_size, prediction_horizon, 8]
@@ -150,28 +161,50 @@ class TrafficPredictionModel(nn.Module):
             neighbor_type_embedded = neighbor_model['neighbor_encoder'](neighbor_type_tensor)
             neighbor_embedded.append(neighbor_type_embedded)
             i += 1
-        neighbor_embedded = torch.cat(neighbor_embedded, dim=-2) # [batch_size, seq_len, len(neighbor_types) * neighbors_per_type * features_per_neighbor]
+        neighbor_embedded = torch.cat(neighbor_embedded, dim=-2) # [batch_size, seq_len, len(neighbor_types) * neighbors_per_type, features_per_neighbor]
 
         # TODO: Encoder lane polyline and signal
 
         final_embedding = []
         for i in range(self.sequence_length):
-            neighbor_embedded_at_t = neighbor_embedded[:, i, :, :]
-            actor_embedded_at_t = actor_embedded[:, i, :, :]
+            neighbor_embedded_at_t = neighbor_embedded[:, i, :, :].unsqueeze(1)
+            actor_embedded_at_t = actor_embedded[:, i, :].unsqueeze(1)
             final_embedding_at_t = model['neighbor_attention'](actor_embedded_at_t, neighbor_embedded_at_t)
-            final_embedding_at_t = actor_embedded_at_t + final_embedding_at_t
-            final_embedding_at_t = model['layer_norm'](final_embedding_at_t)
             final_embedding.append(final_embedding_at_t)
         
         # Add residual connection
-        final_embedding = torch.stack(final_embedding, dim=-2) # [batch_size, seq_len, spatial_attention_output_size]
+        final_embedding = torch.cat(final_embedding, dim=-2) # [batch_size, seq_len, spatial_attention_output_size]
+
+        target_neighbor_features = self._process_neighbors(target_neighbor_tensor, entity_type) # [batch_size, prediction_horizon, len(neighbor_types), neighbors_per_type, features_per_neighbor]
+        i = 0
+        target_neighbor_embedded = []
+
+        for neighbor_type in neighbor_types:
+            neighbor_model = self.neighbor_models[neighbor_type]
+            target_neighbor_type_tensor = target_neighbor_features[:, :, i, :, :]
+            target_neighbor_type_embedded = neighbor_model['neighbor_encoder'](target_neighbor_type_tensor)
+            target_neighbor_embedded.append(target_neighbor_type_embedded)
+            i += 1
+        target_neighbor_embedded = torch.cat(target_neighbor_embedded, dim=-2) # [batch_size, prediction_horizon, len(neighbor_types) * neighbors_per_type, features_per_neighbor]
         
+        output_embeddings, (h_n, c_n) = model['temporal_decoder'](final_embedding)
+        output_embedding = output_embeddings[:, -1, :].unsqueeze(1) # Get the last output embedding
+        h_n, c_n = h_n[:, -1, :].unsqueeze(1), c_n[:, -1, :].unsqueeze(1)
         # Use temporal decoder for prediction horizon
+        predictions = []
         for i in range(self.prediction_horizon):
-            output_embedding = model['temporal_decoder'](final_embedding)
-            # TODO: Get prediction from output embedding
-        
-        return output
+            actor_embedding = output_embedding
+            prediction = model['actor_decoder'](actor_embedding)
+            predictions.append(prediction)
+            # TODO: Predict target distribution
+            target_neighbor_embedding = target_neighbor_embedded[:, i, :, :].unsqueeze(1)
+            target_embedding = model['neighbor_attention'](actor_embedding, target_neighbor_embedding)
+            
+            output_embedding, (h_n, c_n) = model['temporal_decoder'](target_embedding, (h_n, c_n))
+
+        # Convert predictions list to tensor: [batch_size, sequence_length, prediction_horizon, 3]
+        predictions = torch.stack(predictions, dim=1)
+        return predictions
     
     def predict_vehicle(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, 
                        target_sequence: torch.Tensor, target_neighbor_tensor: torch.Tensor) -> torch.Tensor:

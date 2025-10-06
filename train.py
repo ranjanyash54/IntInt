@@ -41,20 +41,24 @@ class MSELoss(nn.Module):
         Compute MSE loss, ignoring zero-padded values.
         
         Args:
-            predictions: [batch_size, prediction_horizon, 8]
-            targets: [batch_size, prediction_horizon, 8]
+            predictions: [batch_size, prediction_horizon, 3]
+            targets: [batch_size, prediction_horizon, 6]
         
         Returns:
             Loss value
         """
-        # Create mask for non-zero targets (non-padded values)
-        mask = (targets != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
+        # Use only first 3 columns of targets to match predictions
+        targets_subset = targets[:, :, 3:6]
+        predictions = predictions.squeeze(-2)
         
+        # Create mask for non-zero targets (non-padded values)
+        mask = (targets_subset != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
+
         # Compute MSE
-        mse = (predictions - targets) ** 2
+        mse = (predictions - targets_subset) ** 2
         
         # Apply mask and compute mean
-        masked_mse = mse * mask.unsqueeze(-1)  # [batch_size, prediction_horizon, 8]
+        masked_mse = mse * mask.unsqueeze(-1)  # [batch_size, prediction_horizon, 3]
         
         if self.reduction == 'mean':
             # Sum over all dimensions and divide by number of non-zero elements
@@ -82,18 +86,18 @@ def train_epoch(predictor: TrafficPredictor,
     pedestrian_losses = []
     
     # Train on vehicle data
-    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(vehicle_loader):
+    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(vehicle_loader, desc="Training Vehicle")):
         loss = predictor.train_step(
-            input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'vehicle',
+            input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'veh',
             vehicle_optimizer, criterion
         )
         vehicle_losses.append(loss)
     
     # Train on pedestrian data (if available)
     if pedestrian_loader is not None:
-        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pedestrian_loader):
+        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(pedestrian_loader, desc="Training Pedestrian")):
             loss = predictor.train_step(
-                input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'pedestrian',
+                input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'ped',
                 pedestrian_optimizer, criterion
             )
             pedestrian_losses.append(loss)
@@ -115,18 +119,18 @@ def validate_epoch(predictor: TrafficPredictor,
     
     # Validate on vehicle data
     with torch.no_grad():
-        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, _) in enumerate(vehicle_loader):
+        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(vehicle_loader, desc="Validating Vehicle")):
             loss = predictor.validate(
-                input_tensor, neighbor_tensor, target_tensor, 'vehicle', criterion
+                input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'veh', criterion
             )
             vehicle_losses.append(loss)
     
     # Validate on pedestrian data (if available)
     if pedestrian_loader is not None:
         with torch.no_grad():
-            for batch_idx, (input_tensor, neighbor_tensor, target_tensor, _) in enumerate(pedestrian_loader):
+            for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(pedestrian_loader, desc="Validating Pedestrian")):
                 loss = predictor.validate(
-                    input_tensor, neighbor_tensor, target_tensor, 'pedestrian', criterion
+                    input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'ped', criterion
                 )
                 pedestrian_losses.append(loss)
     
@@ -192,20 +196,20 @@ def main():
     logger.info(f"Model running on: {predictor.device}")
 
     # Loss function and optimizers
-    criterion = MSELoss()
+    criterion = MSELoss(reduction='sum')
     
     # Separate optimizers for vehicle and pedestrian models
     vehicle_optimizer = optim.Adam(
-        predictor.model.models['vehicle_model'].parameters(),
+        predictor.model.models['veh'].parameters(),
         lr=config['learning_rate']
     )
     
     # Create pedestrian optimizer only if pedestrian model exists
     pedestrian_optimizer = None
     pedestrian_scheduler = None
-    if 'pedestrian_model' in predictor.model.models:
+    if 'ped' in predictor.model.models:
         pedestrian_optimizer = optim.Adam(
-            predictor.model.models['pedestrian_model'].parameters(),
+            predictor.model.models['ped'].parameters(),
             lr=config['learning_rate']
         )
         

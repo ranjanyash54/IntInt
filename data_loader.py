@@ -12,7 +12,7 @@ class TrafficDataset(Dataset):
     """Dataset for traffic prediction using scene, object, and time data."""
     
     def __init__(self, data_list: List[Tuple[int, int, int]], environment: Environment, 
-                 sequence_length: int = 10, prediction_horizon: int = 5, max_nbr: int = 10):
+                 sequence_length: int = 10, prediction_horizon: int = 5, max_nbr: int = 10, object_type: str = 'veh'):
         """
         Initialize the dataset.
         
@@ -28,6 +28,7 @@ class TrafficDataset(Dataset):
         self.sequence_length = sequence_length
         self.prediction_horizon = prediction_horizon
         self.max_nbr = max_nbr
+        self.object_type = object_type
         
         # Filter valid samples (with enough history and future)
         self.valid_samples = self._filter_valid_samples()
@@ -77,8 +78,6 @@ class TrafficDataset(Dataset):
         for t in range(time - self.sequence_length + 1, time + 1):
             # Get entity data for current object
             entity_data = scene.get_entity_data(t, object_id)
-            entity_type = entity_data['vehicle_type']
-            entity_string = 'vehicle' if entity_type == 0 else 'pedestrian'
             if entity_data is None:
                 # Use zero padding if data is missing
                 features = [0.0] * 6  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
@@ -130,13 +129,14 @@ class TrafficDataset(Dataset):
     def _get_neighbors_features(self, scene, object_id: int, time: int, future: bool = False) -> Dict[str, List[List[float]]]:
         """Get features for neighbors of the given object at the specified time, organized by type."""
         neighbor_features = {}
-        entity_type = scene.get_entity_data(time, object_id)['vehicle_type']
-        entity_string = 'veh' if entity_type == 0 else 'ped'
+        entity_string = self.object_type
         # Get entity data for normalization
         
         neighbor_types = self.environment.neighbor_type[entity_string]
         
         for neighbor_type in neighbor_types:
+            # Initialize list for this neighbor type
+            neighbor_features[neighbor_type] = []
             # Get neighbors for this type
             neighbors = scene.get_neighbors(time, object_id, neighbor_type)
             
@@ -252,14 +252,16 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         train_vehicle_samples, train_env,
         sequence_length=config['sequence_length'],
         prediction_horizon=config['prediction_horizon'],
-        max_nbr=config['max_nbr']
+        max_nbr=config['max_nbr'],
+        object_type='veh'
     )
     
     val_vehicle_dataset = TrafficDataset(
         val_vehicle_samples, val_env,
         sequence_length=config['sequence_length'],
         prediction_horizon=config['prediction_horizon'],
-        max_nbr=config['max_nbr']
+        max_nbr=config['max_nbr'],
+        object_type='veh'
     )
     
     # Create pedestrian datasets only if data is available
@@ -271,7 +273,8 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
             train_pedestrian_samples, train_env,
             sequence_length=config['sequence_length'],
             prediction_horizon=config['prediction_horizon'],
-            max_nbr=config['max_nbr']
+            max_nbr=config['max_nbr'],
+            object_type='ped'
         )
     
     if has_val_pedestrians:
@@ -279,7 +282,8 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
             val_pedestrian_samples, val_env,
             sequence_length=config['sequence_length'],
             prediction_horizon=config['prediction_horizon'],
-            max_nbr=config['max_nbr']
+            max_nbr=config['max_nbr'],
+            object_type='ped'
         )
     
     # Create dataloaders
