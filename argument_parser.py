@@ -20,15 +20,10 @@ def create_parser():
     # Data arguments
     parser.add_argument('--config', type=str, default='config.json',
                        help='Path to configuration file')
-    parser.add_argument('--train_data', type=str, default='data/train',
+    parser.add_argument('--train_data', type=str, default='output/train_environment.pkl',
                        help='Path to training data directory')
-    parser.add_argument('--val_data', type=str, default='data/validation',
+    parser.add_argument('--val_data', type=str, default='output/validation_environment.pkl',
                        help='Path to validation data directory')
-    
-    # Model arguments
-    parser.add_argument('--model_type', type=str, default='simple',
-                       choices=['simple', 'lstm'],
-                       help='Type of model to train')
     
     # Training arguments
     parser.add_argument('--num_workers', type=int, default=None,
@@ -96,10 +91,6 @@ def validate_args(args):
     if not Path(args.val_data).exists():
         logger.warning(f"Validation data directory not found: {args.val_data}")
     
-    # Validate model type
-    if args.model_type not in ['simple', 'lstm']:
-        raise ValueError(f"Invalid model type: {args.model_type}")
-    
     # Validate device
     if args.device is not None and args.device not in ['cpu', 'cuda']:
         raise ValueError(f"Invalid device: {args.device}")
@@ -134,9 +125,6 @@ def print_usage_examples():
     print("Override data loading workers:")
     print("  python train.py --num_workers 8")
     print()
-    print("Use GPU with custom model:")
-    print("  python train.py --device cuda --model_type lstm")
-    print()
     print("Custom configuration file:")
     print("  python train.py --config custom_config.json")
     print()
@@ -144,7 +132,7 @@ def print_usage_examples():
     print("  python train.py --batch_size 128 --learning_rate 0.0001 --num_epochs 50")
     print()
     print("Full custom setup:")
-    print("  python train.py --config custom_config.json --num_workers 8 --device cuda --model_type lstm --batch_size 128")
+    print("  python train.py --config custom_config.json --num_workers 8 --device cuda --batch_size 128")
     print()
     print("Show all available arguments:")
     print("  python train.py --help")
