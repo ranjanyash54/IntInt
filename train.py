@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import json
 import time
+from datetime import datetime
 from tqdm import tqdm
 import joblib
 
@@ -86,21 +87,27 @@ def train_epoch(predictor: TrafficPredictor,
     pedestrian_losses = []
     
     # Train on vehicle data
-    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(vehicle_loader, desc="Training Vehicle")):
+    pbar = tqdm(vehicle_loader, desc="Training Vehicle")
+    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
         loss = predictor.train_step(
             input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'veh',
             vehicle_optimizer, criterion
         )
         vehicle_losses.append(loss)
+        current_lr = vehicle_optimizer.param_groups[0]['lr']
+        pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
     
     # Train on pedestrian data (if available)
     if pedestrian_loader is not None:
-        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(pedestrian_loader, desc="Training Pedestrian")):
+        pbar = tqdm(pedestrian_loader, desc="Training Pedestrian")
+        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
             loss = predictor.train_step(
                 input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'ped',
                 pedestrian_optimizer, criterion
             )
             pedestrian_losses.append(loss)
+            current_lr = pedestrian_optimizer.param_groups[0]['lr']
+            pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
     
     avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
     avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
@@ -119,20 +126,24 @@ def validate_epoch(predictor: TrafficPredictor,
     
     # Validate on vehicle data
     with torch.no_grad():
-        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(vehicle_loader, desc="Validating Vehicle")):
+        pbar = tqdm(vehicle_loader, desc="Validating Vehicle")
+        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
             loss = predictor.validate(
                 input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'veh', criterion
             )
             vehicle_losses.append(loss)
+            pbar.set_postfix(loss=f"{loss:.6f}")
     
     # Validate on pedestrian data (if available)
     if pedestrian_loader is not None:
         with torch.no_grad():
-            for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(tqdm(pedestrian_loader, desc="Validating Pedestrian")):
+            pbar = tqdm(pedestrian_loader, desc="Validating Pedestrian")
+            for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
                 loss = predictor.validate(
                     input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'ped', criterion
                 )
                 pedestrian_losses.append(loss)
+                pbar.set_postfix(loss=f"{loss:.6f}")
     
     avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
     avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
@@ -148,9 +159,19 @@ def main():
     train_data_folder = args.train_data
     val_data_folder = args.val_data
     
-    # Create output directory
-    output_dir = Path(config.get('save_dir', 'models'))
-    output_dir.mkdir(exist_ok=True)
+    # Create timestamped output directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_output_dir = Path(config.get('save_dir', 'models'))
+    output_dir = base_output_dir / f"training_{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    logger.info(f"Output directory: {output_dir}")
+    
+    # Save config to timestamped directory
+    config_path = output_dir / "config.json"
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    logger.info(f"Config saved to {config_path}")
     
     # Load environments from joblib files
     logger.info("Loading training environment from joblib file...")
@@ -188,12 +209,13 @@ def main():
     
     predictor = TrafficPredictor(config, train_env, val_env)
     
-    # Log device information
+    # Log device information and model parameters
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         logger.info(f"CUDA device: {torch.cuda.get_device_name()}")
         logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     logger.info(f"Model running on: {predictor.device}")
+    logger.info(f"Total trainable parameters: {predictor.count_parameters():,}")
 
     # Loss function and optimizers
     criterion = MSELoss(reduction='sum')
@@ -213,13 +235,13 @@ def main():
             lr=config['learning_rate']
         )
         
-        pedestrian_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            pedestrian_optimizer, mode='min', factor=0.5, patience=5
+        pedestrian_scheduler = optim.lr_scheduler.ExponentialLR(
+            pedestrian_optimizer, gamma=0.95
         )
     
     # Learning rate schedulers
-    vehicle_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        vehicle_optimizer, mode='min', factor=0.5, patience=5
+    vehicle_scheduler = optim.lr_scheduler.ExponentialLR(
+        vehicle_optimizer, gamma=0.95
     )
     
     # Training history
@@ -250,9 +272,9 @@ def main():
         )
         
         # Update learning rates
-        vehicle_scheduler.step(val_vehicle_loss)
+        vehicle_scheduler.step()
         if pedestrian_scheduler is not None:
-            pedestrian_scheduler.step(val_pedestrian_loss)
+            pedestrian_scheduler.step()
         
         # Record history
         history['train_vehicle_loss'].append(train_vehicle_loss)

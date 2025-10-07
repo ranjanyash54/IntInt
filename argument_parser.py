@@ -34,7 +34,7 @@ def create_parser():
                        help='Batch size (overrides config)')
     parser.add_argument('--learning_rate', type=float, default=None,
                        help='Learning rate (overrides config)')
-    parser.add_argument('--num_epochs', type=int, default=None,
+    parser.add_argument('--num_epochs', type=int, default=10,
                        help='Number of epochs (overrides config)')
     
     # Logging arguments

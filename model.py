@@ -302,4 +302,8 @@ class TrafficPredictor:
         """Load the model."""
         checkpoint = torch.load(filepath, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        logger.info(f"Model loaded from {filepath}") 
+        logger.info(f"Model loaded from {filepath}")
+    
+    def count_parameters(self) -> int:
+        """Count the total number of trainable parameters in the model."""
+        return sum(p.numel() for p in self.model.parameters() if p.requires_grad) 
