@@ -132,7 +132,7 @@ def print_usage_examples():
     print("  python train.py --batch_size 128 --learning_rate 0.0001 --num_epochs 50")
     print()
     print("Full custom setup:")
-    print("  python train.py --config custom_config.json --num_workers 8 --device cuda --batch_size 128")
+    print("  python train.py --config config.json --num_workers 8 --device cuda --num_epochs 50")
     print()
     print("Show all available arguments:")
     print("  python train.py --help")

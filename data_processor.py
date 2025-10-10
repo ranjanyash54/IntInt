@@ -30,9 +30,13 @@ class TrafficDataProcessor:
         Args:
             data_root: Root directory containing train and validation folders
         """
-        self.data_root = Path(data_root)
-        self.train_folder = self.data_root / "train"
-        self.validation_folder = self.data_root / "validation"
+        self.raw_data_folder = Path(data_root) / "raw"
+        self.train_folder = self.raw_data_folder / "train"
+        self.validation_folder = self.raw_data_folder / "validation"
+        self.signal_data_folder = Path(data_root) / "signal"
+        self.signal_train_folder = self.signal_data_folder / "train"
+        self.signal_validation_folder = self.signal_data_folder / "validation"
+        self.map_data_folder = Path(data_root) / "map_info"
         
         # Environment objects
         self.train_environment: Optional[Environment] = None
@@ -49,19 +53,17 @@ class TrafficDataProcessor:
         
         # Create training environment
         if self.train_folder.exists():
-            self.train_environment = Environment(str(self.train_folder), "train")
+            self.train_environment = Environment(str(self.train_folder), str(self.signal_train_folder), str(self.map_data_folder), "train")
             logger.info(f"Created training environment with {len(self.train_environment)} scenes")
         else:
             logger.warning(f"Train folder not found: {self.train_folder}")
-            self.train_environment = Environment(str(self.train_folder), "train")
         
         # Create validation environment
         if self.validation_folder.exists():
-            self.validation_environment = Environment(str(self.validation_folder), "validation")
+            self.validation_environment = Environment(str(self.validation_folder), str(self.signal_validation_folder), str(self.map_data_folder), "validation")
             logger.info(f"Created validation environment with {len(self.validation_environment)} scenes")
         else:
             logger.warning(f"Validation folder not found: {self.validation_folder}")
-            self.validation_environment = Environment(str(self.validation_folder), "validation")
         
         logger.info("Environment creation complete.")
         return self.train_environment, self.validation_environment

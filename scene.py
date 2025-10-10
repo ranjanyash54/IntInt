@@ -1,3 +1,4 @@
+from turtle import pos
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
@@ -12,15 +13,17 @@ class Scene:
     Each scene contains information about objects (vehicles, pedestrians) at a traffic intersection.
     """
     
-    def __init__(self, file_path: str, scene_id: int):
+    def __init__(self, file_path: str, scene_id: int, signal_file_path: str = None):
         """
         Initialize a Scene with data from a file.
         
         Args:
-            file_path: Path to the data file
+            file_path: Path to the raw data file
             scene_id: Unique identifier for this scene
+            signal_file_path: Path to the signal data file (optional)
         """
         self.file_path = Path(file_path)
+        self.signal_file_path = Path(signal_file_path) if signal_file_path else None
         self.scene_id = scene_id
         self.data: Optional[pd.DataFrame] = None
         self.timesteps: int = 0
@@ -48,15 +51,18 @@ class Scene:
         self.neighbor_threshold: float = 50.0  # Default threshold in units
         
         # Load the data
-        self._load_data()
+        self._load_raw_data()
+        self._load_signal()
     
-    def _load_data(self):
+    def _load_raw_data(self):
         """Load data from the file and perform basic validation."""
         try:
             # Load the data file
             # The data file does not have any columns, so we must specify them manually.
             columns = ['time', 'id', 'x', 'y', 'theta', 'vehicle_type', 'cluster', 'signal', 'direction_id', 'maneuver_id', 'region']
             self.data = pd.read_csv(self.file_path, sep='\t', header=None, names=columns)
+            self.data['time'] = self.data['time'].astype(int)
+            self.data['time'] -= self.data['time'].min()
             
             # Validate required columns
             required_columns = ['time', 'id', 'vehicle_type', 'x', 'y', 'theta']
@@ -104,6 +110,20 @@ class Scene:
             logger.error(f"Error loading scene {self.scene_id} from {self.file_path}: {e}")
             raise
     
+    def _load_signal(self):
+        """Load signal data from the file."""
+        if self.signal_file_path is None:
+            return
+        # TODO: Implement signal file loading
+        signals_data = pd.read_csv(self.signal_file_path, index_col=False, header=None, sep='\t')
+        signals_data.columns = ['time', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+        signals_data['time'] = signals_data['time'].astype(int)
+        signals_data['time'] -= signals_data['time'].min()
+        self.signals = signals_data.values
+        logger.info(f"Loaded signal data for scene {self.scene_id}")
+        logger.info(f"  Signals: {self.signals.shape}")
+
+
     def get_timestep_data(self, timestep: int) -> pd.DataFrame:
         """
         Get data for a specific timestep.
@@ -330,6 +350,8 @@ class Scene:
             sin_theta = np.sin(theta)
             cos_theta = np.cos(theta)
             vehicle_type = float(row['vehicle_type'])
+            cluster_id = int(row['cluster'])
+            signal_id = int(row['signal'])
             
             # Check if velocity columns exist with safe defaults
             vx = row.get('vx', 0.0)
@@ -352,7 +374,9 @@ class Scene:
                 'vx': float(vx),
                 'vy': float(vy),
                 'theta': float(row['theta']),
-                'vehicle_type': float(row['vehicle_type'])
+                'vehicle_type': float(vehicle_type),
+                'cluster_id': int(cluster_id),
+                'signal_id': int(signal_id)
             }
         
         logger.debug(f"Created entity dictionary with {len(self.entity_data)} entries")
@@ -564,6 +588,24 @@ class Scene:
         self.neighbor_threshold = threshold
         self._calculate_adjacency_lists()
     
+    def convert_rectangular_to_polar(self, pos : Tuple[float, float]) -> Tuple[float, float, float]:
+        """
+        Convert rectangular coordinates to polar coordinates.
+
+        Args:
+            x: The x coordinate
+            y: The y coordinate
+
+        Returns:
+            Tuple of (r, theta, sin_theta, cos_theta)
+        """
+        x, y = pos
+        r = np.sqrt((x-self.center_point[0])**2 + (y-self.center_point[1])**2)
+        theta = np.arctan2(y-self.center_point[1], x-self.center_point[0])
+        sin_theta = np.sin(theta)
+        cos_theta = np.cos(theta)
+        return r, sin_theta, cos_theta
+
     def __len__(self) -> int:
         """Return the number of timesteps in the scene."""
         return self.timesteps

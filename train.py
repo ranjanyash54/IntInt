@@ -88,9 +88,9 @@ def train_epoch(predictor: TrafficPredictor,
     
     # Train on vehicle data
     pbar = tqdm(vehicle_loader, desc="Training Vehicle")
-    for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
+    for batch_idx, input in enumerate(pbar):
         loss = predictor.train_step(
-            input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'veh',
+            input, 'veh',
             vehicle_optimizer, criterion
         )
         vehicle_losses.append(loss)
@@ -100,9 +100,9 @@ def train_epoch(predictor: TrafficPredictor,
     # Train on pedestrian data (if available)
     if pedestrian_loader is not None:
         pbar = tqdm(pedestrian_loader, desc="Training Pedestrian")
-        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
+        for batch_idx, input in enumerate(pbar):
             loss = predictor.train_step(
-                input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'ped',
+                input, 'ped',
                 pedestrian_optimizer, criterion
             )
             pedestrian_losses.append(loss)
@@ -127,9 +127,9 @@ def validate_epoch(predictor: TrafficPredictor,
     # Validate on vehicle data
     with torch.no_grad():
         pbar = tqdm(vehicle_loader, desc="Validating Vehicle")
-        for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
+        for batch_idx, input in enumerate(pbar):
             loss = predictor.validate(
-                input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'veh', criterion
+                input, 'veh', criterion
             )
             vehicle_losses.append(loss)
             pbar.set_postfix(loss=f"{loss:.6f}")
@@ -138,9 +138,9 @@ def validate_epoch(predictor: TrafficPredictor,
     if pedestrian_loader is not None:
         with torch.no_grad():
             pbar = tqdm(pedestrian_loader, desc="Validating Pedestrian")
-            for batch_idx, (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor) in enumerate(pbar):
+            for batch_idx, input in enumerate(pbar):
                 loss = predictor.validate(
-                    input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, 'ped', criterion
+                    input, 'ped', criterion
                 )
                 pedestrian_losses.append(loss)
                 pbar.set_postfix(loss=f"{loss:.6f}")
@@ -160,7 +160,7 @@ def main():
     val_data_folder = args.val_data
     
     # Create timestamped output directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     base_output_dir = Path(config.get('save_dir', 'models'))
     output_dir = base_output_dir / f"training_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)

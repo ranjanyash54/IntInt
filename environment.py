@@ -6,7 +6,7 @@ import glob
 import logging
 from joblib import dump, load
 from scene import Scene
-
+import pickle
 logger = logging.getLogger(__name__)
 
 class Environment:
@@ -16,15 +16,19 @@ class Environment:
     one data file with 3000 timesteps.
     """
     
-    def __init__(self, data_folder: str, environment_type: str = "train"):
+    def __init__(self, data_folder: str, signal_info_folder: str = None, map_data_folder: str = None, environment_type: str = "train"):
         """
         Initialize an Environment with scenes from a data folder.
         
         Args:
             data_folder: Path to the folder containing scene files
+            signal_info_folder: Path to the folder containing signal info files (optional)
+            map_data_folder: Path to the folder containing map data (optional)
             environment_type: Type of environment ("train" or "validation")
         """
         self.data_folder = Path(data_folder)
+        self.signal_info_folder = signal_info_folder
+        self.map_data_folder = Path(map_data_folder) if map_data_folder else None
         self.environment_type = environment_type
         self.scenes: List[Scene] = []
         self.scene_count: int = 0
@@ -44,6 +48,22 @@ class Environment:
         
         # Load all scenes from the folder
         self._load_scenes()
+        if self.map_data_folder:
+            self._load_map_info()
+
+    def _load_map_info(self):
+        """Load map information from the file."""
+        if not self.map_data_folder or not self.map_data_folder.exists():
+            logger.warning("Map data folder not provided or does not exist")
+            return
+
+        cluster_polylines_info_path = self.map_data_folder / "cluster_polylines_dict.pickle"
+        with open(cluster_polylines_info_path, 'rb') as f:
+            self.cluster_polylines_dict = pickle.load(f)
+
+        lane_end_coords_info_path = self.map_data_folder / "lane_end_coords_dict.pickle"
+        with open(lane_end_coords_info_path, 'rb') as f:
+            self.lane_end_coords_dict = pickle.load(f)
     
     def _load_scenes(self):
         """Load all scene files from the data folder."""
@@ -55,16 +75,27 @@ class Environment:
         scene_files = glob.glob(str(self.data_folder / "*.txt"))
         logger.info(f"Found {len(scene_files)} scene files in {self.data_folder}")
         
+        # Create a dictionary of signal files by filename if signal_info_folder exists
+        signal_files_dict = {}
+        if self.signal_info_folder and Path(self.signal_info_folder).exists():
+            signal_info_files = glob.glob(str(Path(self.signal_info_folder) / "*.txt"))
+            signal_files_dict = {Path(f).name: f for f in signal_info_files}
+            logger.info(f"Found {len(signal_info_files)} signal files in {self.signal_info_folder}")
+
         for scene_id, file_path in enumerate(sorted(scene_files)):
             try:
-                scene = Scene(file_path, scene_id)
+                # Find matching signal file by filename
+                filename = Path(file_path).name
+                signal_file_path = signal_files_dict.get(filename)
+
+                scene = Scene(file_path, scene_id, signal_file_path)
                 self.scenes.append(scene)
                 
                 # Update environment statistics
                 self.total_timesteps += scene.timesteps
                 self.total_objects += scene.unique_objects
                 
-                logger.info(f"Added scene {scene_id}: {Path(file_path).name}")
+                logger.info(f"Added scene {scene_id}: {filename}")
                 
             except Exception as e:
                 logger.error(f"Failed to load scene {scene_id} from {file_path}: {e}")

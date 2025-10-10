@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 from environment import Environment
 import numpy as np
 from typing import List, Tuple, Dict, Optional
+from model_utils import get_nearby_lane_polylines, check_if_signal_visible
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ class TrafficDataset(Dataset):
     """Dataset for traffic prediction using scene, object, and time data."""
     
     def __init__(self, data_list: List[Tuple[int, int, int]], environment: Environment, 
-                 sequence_length: int = 10, prediction_horizon: int = 5, max_nbr: int = 10, object_type: str = 'veh'):
+                 sequence_length: int = 10, prediction_horizon: int = 5, max_nbr: int = 10, config: Dict = None, object_type: str = 'veh'):
         """
         Initialize the dataset.
         
@@ -29,7 +30,11 @@ class TrafficDataset(Dataset):
         self.prediction_horizon = prediction_horizon
         self.max_nbr = max_nbr
         self.object_type = object_type
-        
+        self.config = config
+
+        self.actor_encoder_input_size = config.get('actor_encoder_input_size', 6)
+        self.neighbor_encoder_input_size = config.get('neighbor_encoder_input_size', 6)
+
         # Filter valid samples (with enough history and future)
         self.valid_samples = self._filter_valid_samples()
         
@@ -70,17 +75,21 @@ class TrafficDataset(Dataset):
         """Get a sample from the dataset."""
         scene_id, object_id, time = self.valid_samples[idx]
         scene = self.environment.get_scene(scene_id)
-        
+
+        lane_end_coords_dict = self.environment.lane_end_coords_dict
+
         # Get input sequence (history)
         input_sequence = []
         neighbor_sequence = []
+        polyline_sequence = []
+        signal_visible_sequence = []
         
         for t in range(time - self.sequence_length + 1, time + 1):
             # Get entity data for current object
             entity_data = scene.get_entity_data(t, object_id)
             if entity_data is None:
                 # Use zero padding if data is missing
-                features = [0.0] * 6  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
+                features = [0.0] * self.actor_encoder_input_size  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
             else:
                 features = [
                     entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
@@ -91,20 +100,25 @@ class TrafficDataset(Dataset):
             # Get neighbors for this timestep
             neighbors_features_dict = self._get_neighbors_features(scene, object_id, t)
             # TODO: Add neighbors and signal
+            polyline_features, signal_visible = self._get_polyline_features(scene, object_id, t)
             # Flatten the dictionary into a list for tensor conversion
             neighbors_features = self._flatten_neighbors_dict(neighbors_features_dict)
             neighbor_sequence.append(neighbors_features)
+            polyline_sequence.append(polyline_features)
+            signal_visible_sequence.append(signal_visible)
         
         # Get target sequence (future) with all features
         target_sequence = []
         target_neighbor_sequence = []
-        
+        target_polyline_sequence = []
+        target_signal_visible_sequence = []
+
         for t in range(time + 1, time + self.prediction_horizon + 1):
             # Get entity data for current object (all features)
             entity_data = scene.get_entity_data(t, object_id)
             if entity_data is None:
                 # Use zero padding if data is missing
-                features = [0.0] * 6  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
+                features = [0.0] * self.actor_encoder_input_size  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
             else:
                 features = [
                     entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
@@ -117,15 +131,55 @@ class TrafficDataset(Dataset):
             # Flatten the dictionary into a list for tensor conversion
             target_neighbors_features = self._flatten_neighbors_dict(target_neighbors_features_dict)
             target_neighbor_sequence.append(target_neighbors_features)
-        
+            target_polyline_sequence.append(polyline_features)
+            target_signal_visible_sequence.append(signal_visible)
         # Convert to tensors
-        input_tensor = torch.tensor(input_sequence, dtype=torch.float32)
-        neighbor_tensor = torch.tensor(neighbor_sequence, dtype=torch.float32)
-        target_tensor = torch.tensor(target_sequence, dtype=torch.float32)
-        target_neighbor_tensor = torch.tensor(target_neighbor_sequence, dtype=torch.float32)
+        input_tensor = torch.tensor(np.array(input_sequence), dtype=torch.float32)
+        neighbor_tensor = torch.tensor(np.array(neighbor_sequence), dtype=torch.float32)
+
+        target_tensor = torch.tensor(np.array(target_sequence), dtype=torch.float32)
+        target_neighbor_tensor = torch.tensor(np.array(target_neighbor_sequence), dtype=torch.float32)
+
+        polyline_tensor = torch.tensor(np.array(polyline_sequence), dtype=torch.float32)
+        target_polyline_tensor = torch.tensor(np.array(target_polyline_sequence), dtype=torch.float32)
+
+        signal_tensor = torch.tensor(np.array(signal_visible_sequence), dtype=torch.float32)
+        target_signal_tensor = torch.tensor(np.array(target_signal_visible_sequence), dtype=torch.float32)
+
         
-        return input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor
+        return input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor
     
+    def _get_polyline_features(self, scene, object_id: int, time: int):
+        """Get features for the polyline of the given object at the specified time."""
+        cluster_polylines_dict = self.environment.cluster_polylines_dict
+        lane_end_coords_dict = self.environment.lane_end_coords_dict
+
+        entity_data = scene.get_entity_data(time, object_id)
+        if entity_data is None:
+            cluster_id = '-1'
+            x, y = 0, 0
+            heading = 0
+        else:
+            cluster_id = str(entity_data['cluster_id'])
+            x, y = entity_data['x'], entity_data['y']
+            heading = entity_data['theta']
+
+        # Get nearby lane polylines in the same cluster
+        lane_polylines = get_nearby_lane_polylines(scene, self.config, (x, y), heading, cluster_polylines_dict.get(cluster_id, []))
+
+        # Check if the traffic signal is visible
+        signal_vector = check_if_signal_visible(scene, self.config, (x, y), lane_end_coords_dict.get(cluster_id, []))
+        signal_list = scene.signals
+        if time != int(signal_list[time][0]):
+            import pdb; pdb.set_trace()
+        phase_signal = signal_list[time][int(cluster_id)+1] # First index is the timestep
+        signal_array = np.zeros(self.config.get('signal_one_hot_size', 4))
+        if cluster_id != '-1':
+            signal_array[int(phase_signal)] = 1
+        traffic_signal = np.concatenate((signal_vector, signal_array))
+
+        return lane_polylines, traffic_signal
+
     def _get_neighbors_features(self, scene, object_id: int, time: int, future: bool = False) -> Dict[str, List[List[float]]]:
         """Get features for neighbors of the given object at the specified time, organized by type."""
         neighbor_features = {}
@@ -161,13 +215,13 @@ class TrafficDataset(Dataset):
                     ]
                 else:
                     # Zero padding for missing neighbor data
-                    features = [0.0] * 6
+                    features = [0.0] * self.neighbor_encoder_input_size
                 
                 neighbor_features[neighbor_type].append(features)
             
             # Pad with zeros if we have fewer than max_nbr neighbors
             while len(neighbor_features[neighbor_type]) < self.max_nbr:
-                neighbor_features[neighbor_type].append([0.0] * 6)
+                neighbor_features[neighbor_type].append([0.0] * self.neighbor_encoder_input_size)
 
         
         return neighbor_features
@@ -253,6 +307,7 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         sequence_length=config['sequence_length'],
         prediction_horizon=config['prediction_horizon'],
         max_nbr=config['max_nbr'],
+        config=config,
         object_type='veh'
     )
     
@@ -261,6 +316,7 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         sequence_length=config['sequence_length'],
         prediction_horizon=config['prediction_horizon'],
         max_nbr=config['max_nbr'],
+        config=config,
         object_type='veh'
     )
     
@@ -274,6 +330,7 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
             sequence_length=config['sequence_length'],
             prediction_horizon=config['prediction_horizon'],
             max_nbr=config['max_nbr'],
+            config=config,
             object_type='ped'
         )
     
@@ -283,6 +340,7 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
             sequence_length=config['sequence_length'],
             prediction_horizon=config['prediction_horizon'],
             max_nbr=config['max_nbr'],
+            config=config,
             object_type='ped'
         )
     

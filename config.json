@@ -11,6 +11,20 @@
     "spatial_attention_num_layers": 4,
     "spatial_attention_num_neighbors": 10,
 
+    "max_polyline": 10,
+    "polyline_encoder_input_size": 6,
+    "polyline_encoder_output_size": 128,
+    "polyline_encoder_dropout": 0.1,
+    "actor_polyline_attention_radius": 20.0,
+    "visible_polyline_angle_threshold": 45,
+    "actor_head_vector_head_max_diff": 45,
+
+    "signal_encoder_input_size": 10,
+    "signal_encoder_output_size": 128,
+    "signal_encoder_dropout": 0.1,
+    "signal_one_hot_size": 4,
+
+
     "temporal_decoder_input_size": 128,
     "temporal_decoder_output_size": 128,
     "temporal_decoder_dropout": 0.1,
