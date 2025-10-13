@@ -43,6 +43,7 @@ class TrafficPredictionModel(nn.Module):
         self.spatial_attention_num_heads = config.get('spatial_attention_num_heads', 8)
         self.spatial_attention_dropout = config.get('spatial_attention_dropout', 0.1)
 
+        self.temporal_decoder_type = config.get('temporal_decoder_type', 'rnn')
         self.temporal_decoder_input_size = config.get('temporal_decoder_input_size', 128)
         self.temporal_decoder_output_size = config.get('temporal_decoder_output_size', 128)
         self.temporal_decoder_dropout = config.get('temporal_decoder_dropout', 0.1)
@@ -94,6 +95,12 @@ class TrafficPredictionModel(nn.Module):
 
     def _create_entity_model(self, entity_type: str) -> nn.Module:
         """Create a model for a specific entity type (vehicle or pedestrian)."""
+
+        if self.temporal_decoder_type == 'rnn':
+            temporal_decoder = nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout)
+        elif self.temporal_decoder_type == 'transformer':
+            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.temporal_decoder_output_size, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
+
         return nn.ModuleDict({
             # Input embedding
             'actor_encoder': nn.Sequential(
@@ -116,7 +123,7 @@ class TrafficPredictionModel(nn.Module):
             ),
             
             # Temporal decoder for prediction horizon
-            'temporal_decoder': nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout),
+            'temporal_decoder': temporal_decoder,
 
             'actor_decoder': nn.Sequential(
                 nn.Linear(self.temporal_decoder_output_size, self.actor_decoder_output_size),
@@ -148,7 +155,27 @@ class TrafficPredictionModel(nn.Module):
         )
         
         return neighbor_tensor_reshaped
-    
+
+    def _rnn_decoder(self, model, final_embedding, target_neighbor_embedded, embedded_target_polyline, embedded_target_signal):
+        """Decoder for traffic prediction."""
+
+        output_embeddings, (h_n, c_n) = model['temporal_decoder'](final_embedding)
+        output_embedding = output_embeddings[:, -1, :].unsqueeze(1) # Get the last output embedding
+        h_n, c_n = h_n[:, -1, :].unsqueeze(1), c_n[:, -1, :].unsqueeze(1)
+        # Use temporal decoder for prediction horizon
+        predictions = []
+        for i in range(self.prediction_horizon):
+            actor_embedding = output_embedding
+            prediction = model['actor_decoder'](actor_embedding)
+            predictions.append(prediction)
+            # TODO: Predict target distribution
+            target_neighbor_embedding = target_neighbor_embedded[:, i, :, :].unsqueeze(1)
+            target_polyline_embedding = embedded_target_polyline[:, i, :, :].unsqueeze(1)
+            target_signal_embedding = embedded_target_signal[:, i, :].unsqueeze(1).unsqueeze(1)
+            target_neighbors_at_t = torch.cat([target_neighbor_embedding, target_polyline_embedding, target_signal_embedding], dim=-2) # [batch_size, 1, num_polylines + num_neighbors + num_signals, features_per_neighbor]
+            target_embedding = model['neighbor_attention'](actor_embedding, target_neighbors_at_t)
+            output_embedding, (h_n, c_n) = model['temporal_decoder'](target_embedding, (h_n, c_n))
+        return predictions
     
     def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,
                 signal_tensor: torch.Tensor, target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor,
@@ -259,24 +286,13 @@ class TrafficPredictionModel(nn.Module):
 
         embedded_target_signal = model['signal_encoder'](target_signal_tensor) # [batch_size, prediction_horizon, signal_encoder_output_size]
 
-        output_embeddings, (h_n, c_n) = model['temporal_decoder'](final_embedding)
-        output_embedding = output_embeddings[:, -1, :].unsqueeze(1) # Get the last output embedding
-        h_n, c_n = h_n[:, -1, :].unsqueeze(1), c_n[:, -1, :].unsqueeze(1)
-        # Use temporal decoder for prediction horizon
-        predictions = []
-        for i in range(self.prediction_horizon):
-            actor_embedding = output_embedding
-            prediction = model['actor_decoder'](actor_embedding)
-            predictions.append(prediction)
-            # TODO: Predict target distribution
-            target_neighbor_embedding = target_neighbor_embedded[:, i, :, :].unsqueeze(1)
-            target_polyline_embedding = embedded_target_polyline[:, i, :, :].unsqueeze(1)
-            target_signal_embedding = embedded_target_signal[:, i, :].unsqueeze(1).unsqueeze(1)
-            target_neighbors_at_t = torch.cat([target_neighbor_embedding, target_polyline_embedding, target_signal_embedding], dim=-2) # [batch_size, 1, num_polylines + num_neighbors + num_signals, features_per_neighbor]
-            target_embedding = model['neighbor_attention'](actor_embedding, target_neighbors_at_t)
-            
-            output_embedding, (h_n, c_n) = model['temporal_decoder'](target_embedding, (h_n, c_n))
-
+        if self.temporal_decoder_type == 'rnn':
+            predictions = self._rnn_decoder(model, final_embedding, target_neighbor_embedded, embedded_target_polyline, embedded_target_signal)
+        elif self.temporal_decoder_type == 'transformer':
+            predictions = self._transformer_decoder(model, final_embedding, target_neighbor_embedded, embedded_target_polyline, embedded_target_signal)
+        else:
+            raise ValueError(f"Temporal decoder type '{self.temporal_decoder_type}' not supported. Supported types: 'rnn'")
+        
         # Convert predictions list to tensor: [batch_size, sequence_length, prediction_horizon, 3]
         predictions = torch.stack(predictions, dim=1)
         return predictions

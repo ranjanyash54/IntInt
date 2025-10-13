@@ -25,6 +25,7 @@
     "signal_one_hot_size": 4,
 
 
+    "temporal_decoder_type": "transformer",
     "temporal_decoder_input_size": 128,
     "temporal_decoder_output_size": 128,
     "temporal_decoder_dropout": 0.1,
