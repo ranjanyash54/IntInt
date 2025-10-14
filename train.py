@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 import joblib
+import wandb
 
 from data_loader import load_environment_data, create_dataloaders
 from model import TrafficPredictor
@@ -166,6 +167,16 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     logger.info(f"Output directory: {output_dir}")
+    
+    # Initialize Weights & Biases
+    if args.use_wandb:
+        wandb_run_name = args.wandb_name if args.wandb_name else f"run_{timestamp}"
+        wandb.init(
+            project=args.wandb_project,
+            name=wandb_run_name,
+            config=config
+        )
+        logger.info(f"Weights & Biases initialized - Project: {args.wandb_project}, Run: {wandb_run_name}")
     
     # Save config to timestamped directory
     config_path = output_dir / "config.json"
@@ -323,6 +334,26 @@ def main():
                 f"Patience: {history['patience_counter']}"
             )
         
+        # Log to W&B
+        if args.use_wandb:
+            wandb_metrics = {
+                'epoch': epoch + 1,
+                'train/vehicle_loss': train_vehicle_loss,
+                'val/vehicle_loss': val_vehicle_loss,
+                'val/avg_loss': avg_val_loss,
+                'val/best_loss': history['best_val_loss'],
+                'train/vehicle_lr': vehicle_optimizer.param_groups[0]['lr'],
+                'epoch_time': epoch_time,
+                'patience_counter': history['patience_counter']
+            }
+            if has_pedestrian_data:
+                wandb_metrics.update({
+                    'train/pedestrian_loss': train_pedestrian_loss,
+                    'val/pedestrian_loss': val_pedestrian_loss,
+                    'train/pedestrian_lr': pedestrian_optimizer.param_groups[0]['lr']
+                })
+            wandb.log(wandb_metrics)
+        
         # Save checkpoint periodically
         if (epoch + 1) % config['save_interval'] == 0:
             checkpoint_path = output_dir / f"checkpoint_epoch_{epoch+1}.pth"
@@ -345,6 +376,10 @@ def main():
     total_time = time.time() - start_time
     logger.info(f"Training completed in {total_time:.2f} seconds")
     logger.info(f"Best validation loss: {history['best_val_loss']:.6f}")
+    
+    # Finish W&B run
+    if args.use_wandb:
+        wandb.finish()
 
 if __name__ == "__main__":
     main() 

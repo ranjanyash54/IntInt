@@ -43,6 +43,12 @@ def create_parser():
                        help='Logging level')
     parser.add_argument('--save_dir', type=str, default=None,
                        help='Directory to save models (overrides config)')
+    parser.add_argument('--use_wandb', action='store_true',
+                       help='Enable Weights & Biases logging')
+    parser.add_argument('--wandb_project', type=str, default='traffic-prediction',
+                       help='W&B project name')
+    parser.add_argument('--wandb_name', type=str, default=None,
+                       help='W&B run name (defaults to timestamp)')
     
     return parser
 
