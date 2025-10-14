@@ -5,8 +5,19 @@ from typing import Dict, List, Tuple, Optional
 import logging
 import math
 from environment import Environment
-from attention import NeighborAttentionLayer
+from attention import NeighborAttentionLayer, TemporalAttentionLayer
 logger = logging.getLogger(__name__)
+
+
+class MaskToken(nn.Module):
+    """Simple wrapper to store mask token as a module for use in ModuleDict."""
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.token = nn.Parameter(torch.randn(1, 1, d_model))
+    
+    def forward(self, batch_size: int) -> torch.Tensor:
+        """Expand mask token for batch."""
+        return self.token.expand(batch_size, 1, -1)
 
 
 class TrafficPredictionModel(nn.Module):
@@ -99,9 +110,9 @@ class TrafficPredictionModel(nn.Module):
         if self.temporal_decoder_type == 'rnn':
             temporal_decoder = nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout)
         elif self.temporal_decoder_type == 'transformer':
-            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.temporal_decoder_output_size, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
+            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.spatial_attention_num_heads, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
 
-        return nn.ModuleDict({
+        model_dict = nn.ModuleDict({
             # Input embedding
             'actor_encoder': nn.Sequential(
                 nn.Linear(self.actor_encoder_input_size, self.actor_encoder_output_size),
@@ -132,7 +143,13 @@ class TrafficPredictionModel(nn.Module):
             ),
 
         })
-    
+
+        # Add mask token for transformer decoder
+        if self.temporal_decoder_type == 'transformer':
+            model_dict['mask_token'] = MaskToken(self.d_model)
+        
+        return model_dict
+
     def _process_neighbors(self, neighbor_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
         """
         Process neighbor tensor to separate different neighbor types.
@@ -175,6 +192,52 @@ class TrafficPredictionModel(nn.Module):
             target_neighbors_at_t = torch.cat([target_neighbor_embedding, target_polyline_embedding, target_signal_embedding], dim=-2) # [batch_size, 1, num_polylines + num_neighbors + num_signals, features_per_neighbor]
             target_embedding = model['neighbor_attention'](actor_embedding, target_neighbors_at_t)
             output_embedding, (h_n, c_n) = model['temporal_decoder'](target_embedding, (h_n, c_n))
+        return predictions
+    
+    def _transformer_decoder(self, model, final_embedding, target_neighbor_embedded, embedded_target_polyline, embedded_target_signal):
+        """Transformer decoder with mask token for prediction."""
+        batch_size = final_embedding.shape[0]
+        
+        # Get mask token and expand for batch
+        mask_token = model['mask_token'](batch_size)
+        
+        # Step 1: Spatial attention for each prediction horizon with mask token
+        spatial_embeddings = []
+        for i in range(self.prediction_horizon):
+            # Get spatial context at timestep i
+            target_neighbor_at_t = target_neighbor_embedded[:, i, :, :].unsqueeze(1)
+            target_polyline_at_t = embedded_target_polyline[:, i, :, :].unsqueeze(1)
+            target_signal_at_t = embedded_target_signal[:, i, :].unsqueeze(1).unsqueeze(1)
+            
+            # Concatenate spatial features
+            spatial_context = torch.cat([target_neighbor_at_t, target_polyline_at_t, target_signal_at_t], dim=-2)
+            
+            # Apply spatial attention with mask token as query
+            spatial_embedding = model['neighbor_attention'](mask_token, spatial_context)
+            spatial_embeddings.append(spatial_embedding)
+        
+        # Stack spatial embeddings: [batch_size, prediction_horizon, d_model]
+        spatial_embeddings = torch.cat(spatial_embeddings, dim=1)
+        
+        # Step 2: Temporal attention - autoregressive for each prediction timestep
+        predictions = []
+        for i in range(self.prediction_horizon):
+            # Query: spatial embedding at current timestep
+            query = spatial_embeddings[:, i:i+1, :]
+            
+            # Key/Value: history + all previous spatial embeddings
+            if i == 0:
+                key_value = final_embedding
+            else:
+                key_value = torch.cat([final_embedding, spatial_embeddings[:, :i, :]], dim=1)
+            
+            # Apply temporal attention
+            temporal_embedding, _ = model['temporal_decoder'](query, key_value, key_value)
+            
+            # Decode to get prediction
+            prediction = model['actor_decoder'](temporal_embedding)
+            predictions.append(prediction)
+        
         return predictions
     
     def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,

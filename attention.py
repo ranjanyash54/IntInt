@@ -102,3 +102,51 @@ class NeighborAttentionLayer(nn.Module):
         output = attended_output.view(batch_size, seq_len, -1)
         
         return output
+
+class TemporalAttentionLayer(nn.Module):
+    "Attention layer for processing temporal features."
+
+    def __init__(self, d_model: int, num_heads: int, prediction_horizon: int, max_seq_len: int = 1000, dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.prediction_horizon = prediction_horizon
+
+        self.attention = MultiHeadAttention(d_model, num_heads, dropout)
+        
+        # Positional encoding (sinusoidal)
+        self.register_buffer('pos_encoding', self._generate_positional_encoding(max_seq_len, d_model))
+    
+    def _generate_positional_encoding(self, max_len: int, d_model: int) -> torch.Tensor:
+        """Generate sinusoidal positional encoding as in 'Attention is All You Need'."""
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-torch.log(torch.tensor(10000.0)) / d_model))
+        
+        pos_encoding = torch.zeros(max_len, d_model)
+        pos_encoding[:, 0::2] = torch.sin(position * div_term)
+        pos_encoding[:, 1::2] = torch.cos(position * div_term)
+        
+        return pos_encoding
+
+    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
+                mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            query: [batch_size, 1, d_model] - query for current timestep
+            key: [batch_size, seq_len, d_model] - encoded history
+            value: [batch_size, seq_len, d_model] - encoded history
+            mask: optional attention mask
+        
+        Returns:
+            output: [batch_size, 1, d_model]
+            attention_weights: attention weights
+        """
+        batch_size, seq_len, _ = key.shape
+        
+        # Add positional encoding to keys and values
+        key = key + self.pos_encoding[:seq_len, :].unsqueeze(0)
+        value = value + self.pos_encoding[:seq_len, :].unsqueeze(0)
+        
+        # Apply cross attention
+        output, attention_weights = self.attention(query, key, value, mask)
+        
+        return output, attention_weights
