@@ -229,7 +229,7 @@ def main():
     logger.info(f"Total trainable parameters: {predictor.count_parameters():,}")
 
     # Loss function and optimizers
-    criterion = MSELoss(reduction='sum')
+    criterion = MSELoss()
     
     # Separate optimizers for vehicle and pedestrian models
     vehicle_optimizer = optim.Adam(

@@ -349,14 +349,18 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         train_vehicle_dataset, 
         batch_size=config['batch_size'], 
         shuffle=True,
-        num_workers=config.get('num_workers', 0)
+        num_workers=config.get('num_workers', 0),
+        pin_memory=True if config.get('device', 'cpu') == 'cuda' else False,
+        persistent_workers=False if config.get('num_workers', 0) == 0 else True
     )
     
     val_vehicle_loader = DataLoader(
         val_vehicle_dataset, 
         batch_size=config['batch_size'], 
         shuffle=False,
-        num_workers=config.get('num_workers', 0)
+        num_workers=config.get('num_workers', 0),
+        pin_memory=True if config.get('device', 'cpu') == 'cuda' else False,
+        persistent_workers=False if config.get('num_workers', 0) == 0 else True
     )
     
     # Create pedestrian dataloaders only if datasets exist
@@ -368,7 +372,9 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
             train_pedestrian_dataset, 
             batch_size=config['batch_size'], 
             shuffle=True,
-            num_workers=config.get('num_workers', 0)
+            num_workers=config.get('num_workers', 0),
+            pin_memory=True if config.get('device', 'cpu') == 'cuda' else False,
+            persistent_workers=False if config.get('num_workers', 0) == 0 else True
         )
     
     if val_pedestrian_dataset is not None:
@@ -376,7 +382,9 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
             val_pedestrian_dataset, 
             batch_size=config['batch_size'], 
             shuffle=False,
-            num_workers=config.get('num_workers', 0)
+            num_workers=config.get('num_workers', 0),
+            pin_memory=True if config.get('device', 'cpu') == 'cuda' else False,
+            persistent_workers=False if config.get('num_workers', 0) == 0 else True
         )
     
     logger.info(f"Created dataloaders:")

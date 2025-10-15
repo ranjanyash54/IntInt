@@ -57,6 +57,7 @@ class TrafficPredictionModel(nn.Module):
         self.temporal_decoder_type = config.get('temporal_decoder_type', 'rnn')
         self.temporal_decoder_input_size = config.get('temporal_decoder_input_size', 128)
         self.temporal_decoder_output_size = config.get('temporal_decoder_output_size', 128)
+        self.temporal_decoder_num_layers = config.get('temporal_decoder_num_layers', 4)
         self.temporal_decoder_dropout = config.get('temporal_decoder_dropout', 0.1)
 
         self.actor_decoder_output_size = config.get('actor_decoder_output_size', 3)
@@ -110,7 +111,7 @@ class TrafficPredictionModel(nn.Module):
         if self.temporal_decoder_type == 'rnn':
             temporal_decoder = nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout)
         elif self.temporal_decoder_type == 'transformer':
-            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.spatial_attention_num_heads, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
+            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.temporal_decoder_num_layers, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
 
         model_dict = nn.ModuleDict({
             # Input embedding
