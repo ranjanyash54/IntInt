@@ -291,16 +291,8 @@ class Scene:
             entity_trajectory['vx'] = entity_trajectory['x'].diff()
             entity_trajectory['vy'] = entity_trajectory['y'].diff()
             
-            # Shift velocities back by one row
-            entity_trajectory['vx'] = entity_trajectory['vx'].shift(-1)
-            entity_trajectory['vy'] = entity_trajectory['vy'].shift(-1)
-            
-            # Fill the last row with the last calculated velocity
-            if len(entity_trajectory) > 1:
-                last_vx = entity_trajectory['vx'].iloc[-2]  # Second to last value
-                last_vy = entity_trajectory['vy'].iloc[-2]  # Second to last value
-                entity_trajectory.loc[entity_trajectory.index[-1], 'vx'] = last_vx
-                entity_trajectory.loc[entity_trajectory.index[-1], 'vy'] = last_vy
+            entity_trajectory.loc[0, 'vx'] = entity_trajectory.loc[1, 'vx'] 
+            entity_trajectory.loc[0, 'vy'] = entity_trajectory.loc[1, 'vy'] 
             
             # Handle NaN values (first rows after shifting)
             entity_trajectory['vx'] = entity_trajectory['vx'].fillna(0.0)
