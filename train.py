@@ -23,6 +23,7 @@ from data_loader import load_environment_data, create_dataloaders
 from model import TrafficPredictor
 from environment import Environment
 from argument_parser import parse_training_args
+from metrics import TrajectoryMetrics
 
 # Set up logging
 logging.basicConfig(
@@ -80,12 +81,17 @@ def train_epoch(predictor: TrafficPredictor,
                 vehicle_optimizer: optim.Optimizer,
                 pedestrian_optimizer: optim.Optimizer,
                 criterion: nn.Module,
-                device: torch.device) -> Tuple[float, float]:
+                device: torch.device,
+                metrics_calculator: 'TrajectoryMetrics') -> Tuple[float, float, float, float, float, float]:
     """Train for one epoch."""
     predictor.model.train()
     
     vehicle_losses = []
     pedestrian_losses = []
+    vehicle_ades = []
+    vehicle_fdes = []
+    pedestrian_ades = []
+    pedestrian_fdes = []
     
     # Train on vehicle data
     pbar = tqdm(vehicle_loader, desc="Training Vehicle")
@@ -95,8 +101,20 @@ def train_epoch(predictor: TrafficPredictor,
             vehicle_optimizer, criterion
         )
         vehicle_losses.append(loss)
+        
+        # Calculate ADE and FDE
+        with torch.no_grad():
+            predictions = predictor.predict(input, 'veh')
+            input_tensor = input[0].to(predictor.device)
+            target_tensor = input[2].to(predictor.device)
+            current_state = input_tensor[:, -1, :]  # Last timestep
+            
+            ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+            vehicle_ades.append(ade)
+            vehicle_fdes.append(fde)
+        
         current_lr = vehicle_optimizer.param_groups[0]['lr']
-        pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
+        pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}", lr=f"{current_lr:.2e}")
     
     # Train on pedestrian data (if available)
     if pedestrian_loader is not None:
@@ -107,23 +125,44 @@ def train_epoch(predictor: TrafficPredictor,
                 pedestrian_optimizer, criterion
             )
             pedestrian_losses.append(loss)
+            
+            # Calculate ADE and FDE
+            with torch.no_grad():
+                predictions = predictor.predict(input, 'ped')
+                input_tensor = input[0].to(predictor.device)
+                target_tensor = input[2].to(predictor.device)
+                current_state = input_tensor[:, -1, :]  # Last timestep
+                
+                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+                pedestrian_ades.append(ade)
+                pedestrian_fdes.append(fde)
+            
             current_lr = pedestrian_optimizer.param_groups[0]['lr']
-            pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
+            pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}", lr=f"{current_lr:.2e}")
     
     avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
     avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
+    avg_vehicle_ade = np.mean(vehicle_ades) if vehicle_ades else 0.0
+    avg_vehicle_fde = np.mean(vehicle_fdes) if vehicle_fdes else 0.0
+    avg_pedestrian_ade = np.mean(pedestrian_ades) if pedestrian_ades else 0.0
+    avg_pedestrian_fde = np.mean(pedestrian_fdes) if pedestrian_fdes else 0.0
     
-    return avg_vehicle_loss, avg_pedestrian_loss
+    return avg_vehicle_loss, avg_pedestrian_loss, avg_vehicle_ade, avg_vehicle_fde, avg_pedestrian_ade, avg_pedestrian_fde
 
 def validate_epoch(predictor: TrafficPredictor,
                   vehicle_loader: DataLoader,
                   pedestrian_loader: DataLoader,
-                  criterion: nn.Module) -> Tuple[float, float]:
+                  criterion: nn.Module,
+                  metrics_calculator: TrajectoryMetrics) -> Tuple[float, float, float, float, float, float]:
     """Validate for one epoch."""
     predictor.model.eval()
     
     vehicle_losses = []
     pedestrian_losses = []
+    vehicle_ades = []
+    vehicle_fdes = []
+    pedestrian_ades = []
+    pedestrian_fdes = []
     
     # Validate on vehicle data
     with torch.no_grad():
@@ -133,7 +172,18 @@ def validate_epoch(predictor: TrafficPredictor,
                 input, 'veh', criterion
             )
             vehicle_losses.append(loss)
-            pbar.set_postfix(loss=f"{loss:.6f}")
+            
+            # Calculate ADE and FDE
+            predictions = predictor.predict(input, 'veh')
+            input_tensor = input[0].to(predictor.device)
+            target_tensor = input[2].to(predictor.device)
+            current_state = input_tensor[:, -1, :]  # Last timestep
+            
+            ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+            vehicle_ades.append(ade)
+            vehicle_fdes.append(fde)
+            
+            pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}")
     
     # Validate on pedestrian data (if available)
     if pedestrian_loader is not None:
@@ -144,12 +194,27 @@ def validate_epoch(predictor: TrafficPredictor,
                     input, 'ped', criterion
                 )
                 pedestrian_losses.append(loss)
-                pbar.set_postfix(loss=f"{loss:.6f}")
+                
+                # Calculate ADE and FDE
+                predictions = predictor.predict(input, 'ped')
+                input_tensor = input[0].to(predictor.device)
+                target_tensor = input[2].to(predictor.device)
+                current_state = input_tensor[:, -1, :]  # Last timestep
+                
+                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+                pedestrian_ades.append(ade)
+                pedestrian_fdes.append(fde)
+                
+                pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}")
     
     avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
     avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
+    avg_vehicle_ade = np.mean(vehicle_ades) if vehicle_ades else 0.0
+    avg_vehicle_fde = np.mean(vehicle_fdes) if vehicle_fdes else 0.0
+    avg_pedestrian_ade = np.mean(pedestrian_ades) if pedestrian_ades else 0.0
+    avg_pedestrian_fde = np.mean(pedestrian_fdes) if pedestrian_fdes else 0.0
     
-    return avg_vehicle_loss, avg_pedestrian_loss
+    return avg_vehicle_loss, avg_pedestrian_loss, avg_vehicle_ade, avg_vehicle_fde, avg_pedestrian_ade, avg_pedestrian_fde
 
 def main():
     """Main training function."""
@@ -259,28 +324,56 @@ def main():
     history = {
         'train_vehicle_loss': [],
         'train_pedestrian_loss': [],
+        'train_vehicle_ade': [],
+        'train_vehicle_fde': [],
+        'train_pedestrian_ade': [],
+        'train_pedestrian_fde': [],
         'val_vehicle_loss': [],
         'val_pedestrian_loss': [],
+        'val_vehicle_ade': [],
+        'val_vehicle_fde': [],
+        'val_pedestrian_ade': [],
+        'val_pedestrian_fde': [],
         'best_val_loss': float('inf'),
         'patience_counter': 0
     }
     
+    # Initialize metrics calculator
+    metrics_calculator = TrajectoryMetrics(dt=0.1)
+    
     logger.info("Starting training...")
+    logger.info(f"Validation will run every {args.validate_every} epochs")
     start_time = time.time()
     
     for epoch in range(config['num_epochs']):
         epoch_start_time = time.time()
         
         # Training
-        train_vehicle_loss, train_pedestrian_loss = train_epoch(
+        train_vehicle_loss, train_pedestrian_loss, train_vehicle_ade, train_vehicle_fde, train_pedestrian_ade, train_pedestrian_fde = train_epoch(
             predictor, train_vehicle_loader, train_pedestrian_loader,
-            vehicle_optimizer, pedestrian_optimizer, criterion, predictor.device
+            vehicle_optimizer, pedestrian_optimizer, criterion, predictor.device, metrics_calculator
         )
         
-        # Validation
-        val_vehicle_loss, val_pedestrian_loss = validate_epoch(
-            predictor, val_vehicle_loader, val_pedestrian_loader, criterion
-        )
+        # Validation (only every N epochs or last epoch)
+        should_validate = ((epoch + 1) % args.validate_every == 0) or ((epoch + 1) == config['num_epochs'])
+        if should_validate:
+            val_vehicle_loss, val_pedestrian_loss, val_vehicle_ade, val_vehicle_fde, val_pedestrian_ade, val_pedestrian_fde = validate_epoch(
+                predictor, val_vehicle_loader, val_pedestrian_loader, criterion, metrics_calculator
+            )
+        else:
+            # Use previous validation metrics if not validating this epoch
+            if len(history['val_vehicle_loss']) > 0:
+                val_vehicle_loss = history['val_vehicle_loss'][-1]
+                val_pedestrian_loss = history['val_pedestrian_loss'][-1]
+                val_vehicle_ade = history['val_vehicle_ade'][-1]
+                val_vehicle_fde = history['val_vehicle_fde'][-1]
+                val_pedestrian_ade = history['val_pedestrian_ade'][-1]
+                val_pedestrian_fde = history['val_pedestrian_fde'][-1]
+            else:
+                # First epoch, no previous values
+                val_vehicle_loss = val_pedestrian_loss = 0.0
+                val_vehicle_ade = val_vehicle_fde = 0.0
+                val_pedestrian_ade = val_pedestrian_fde = 0.0
         
         # Update learning rates
         vehicle_scheduler.step()
@@ -289,48 +382,72 @@ def main():
         
         # Record history
         history['train_vehicle_loss'].append(train_vehicle_loss)
+        history['train_vehicle_ade'].append(train_vehicle_ade)
+        history['train_vehicle_fde'].append(train_vehicle_fde)
         history['val_vehicle_loss'].append(val_vehicle_loss)
+        history['val_vehicle_ade'].append(val_vehicle_ade)
+        history['val_vehicle_fde'].append(val_vehicle_fde)
         
         if has_pedestrian_data:
             history['train_pedestrian_loss'].append(train_pedestrian_loss)
+            history['train_pedestrian_ade'].append(train_pedestrian_ade)
+            history['train_pedestrian_fde'].append(train_pedestrian_fde)
             history['val_pedestrian_loss'].append(val_pedestrian_loss)
+            history['val_pedestrian_ade'].append(val_pedestrian_ade)
+            history['val_pedestrian_fde'].append(val_pedestrian_fde)
         else:
             # Record 0 for pedestrian losses when no pedestrian data
             history['train_pedestrian_loss'].append(0.0)
+            history['train_pedestrian_ade'].append(0.0)
+            history['train_pedestrian_fde'].append(0.0)
             history['val_pedestrian_loss'].append(0.0)
+            history['val_pedestrian_ade'].append(0.0)
+            history['val_pedestrian_fde'].append(0.0)
         
-        # Calculate average validation loss
-        if has_pedestrian_data:
-            avg_val_loss = (val_vehicle_loss + val_pedestrian_loss) / 2
-        else:
-            avg_val_loss = val_vehicle_loss
-        
-        # Early stopping check
-        if avg_val_loss < history['best_val_loss']:
-            history['best_val_loss'] = avg_val_loss
-            history['patience_counter'] = 0
+        # Calculate average validation loss and early stopping (only when validating)
+        if should_validate:
+            if has_pedestrian_data:
+                avg_val_loss = (val_vehicle_loss + val_pedestrian_loss) / 2
+            else:
+                avg_val_loss = val_vehicle_loss
             
-            # Save best model
-            best_model_path = output_dir / "best_model.pth"
-            predictor.save_model(str(best_model_path))
-            logger.info(f"New best model saved with validation loss: {avg_val_loss:.6f}")
+            # Early stopping check
+            if avg_val_loss < history['best_val_loss']:
+                history['best_val_loss'] = avg_val_loss
+                history['patience_counter'] = 0
+                
+                # Save best model
+                best_model_path = output_dir / "best_model.pth"
+                predictor.save_model(str(best_model_path))
+                logger.info(f"New best model saved with validation loss: {avg_val_loss:.6f}")
+            else:
+                history['patience_counter'] += 1
         else:
-            history['patience_counter'] += 1
+            # Use previous avg_val_loss when not validating
+            if has_pedestrian_data:
+                avg_val_loss = (val_vehicle_loss + val_pedestrian_loss) / 2
+            else:
+                avg_val_loss = val_vehicle_loss
         
         # Log progress
         epoch_time = time.time() - epoch_start_time
+        val_indicator = "[VAL]" if should_validate else "[cached]"
         if has_pedestrian_data:
             logger.info(
                 f"Epoch {epoch+1}/{config['num_epochs']} ({epoch_time:.2f}s): "
-                f"Train V:{train_vehicle_loss:.6f} P:{train_pedestrian_loss:.6f} "
-                f"Val V:{val_vehicle_loss:.6f} P:{val_pedestrian_loss:.6f} "
+                f"Train Loss V:{train_vehicle_loss:.6f} P:{train_pedestrian_loss:.6f} | "
+                f"Train ADE V:{train_vehicle_ade:.4f} P:{train_pedestrian_ade:.4f} | "
+                f"Train FDE V:{train_vehicle_fde:.4f} P:{train_pedestrian_fde:.4f} | "
+                f"{val_indicator} Val Loss V:{val_vehicle_loss:.6f} P:{val_pedestrian_loss:.6f} | "
+                f"Val ADE V:{val_vehicle_ade:.4f} P:{val_pedestrian_ade:.4f} | "
+                f"Val FDE V:{val_vehicle_fde:.4f} P:{val_pedestrian_fde:.4f} | "
                 f"Patience: {history['patience_counter']}"
             )
         else:
             logger.info(
                 f"Epoch {epoch+1}/{config['num_epochs']} ({epoch_time:.2f}s): "
-                f"Train V:{train_vehicle_loss:.6f} "
-                f"Val V:{val_vehicle_loss:.6f} "
+                f"Train Loss:{train_vehicle_loss:.6f} ADE:{train_vehicle_ade:.4f} FDE:{train_vehicle_fde:.4f} | "
+                f"{val_indicator} Val Loss:{val_vehicle_loss:.6f} ADE:{val_vehicle_ade:.4f} FDE:{val_vehicle_fde:.4f} | "
                 f"Patience: {history['patience_counter']}"
             )
         
@@ -339,7 +456,11 @@ def main():
             wandb_metrics = {
                 'epoch': epoch + 1,
                 'train/vehicle_loss': train_vehicle_loss,
+                'train/vehicle_ade': train_vehicle_ade,
+                'train/vehicle_fde': train_vehicle_fde,
                 'val/vehicle_loss': val_vehicle_loss,
+                'val/vehicle_ade': val_vehicle_ade,
+                'val/vehicle_fde': val_vehicle_fde,
                 'val/avg_loss': avg_val_loss,
                 'val/best_loss': history['best_val_loss'],
                 'train/vehicle_lr': vehicle_optimizer.param_groups[0]['lr'],
@@ -349,7 +470,11 @@ def main():
             if has_pedestrian_data:
                 wandb_metrics.update({
                     'train/pedestrian_loss': train_pedestrian_loss,
+                    'train/pedestrian_ade': train_pedestrian_ade,
+                    'train/pedestrian_fde': train_pedestrian_fde,
                     'val/pedestrian_loss': val_pedestrian_loss,
+                    'val/pedestrian_ade': val_pedestrian_ade,
+                    'val/pedestrian_fde': val_pedestrian_fde,
                     'train/pedestrian_lr': pedestrian_optimizer.param_groups[0]['lr']
                 })
             wandb.log(wandb_metrics)
