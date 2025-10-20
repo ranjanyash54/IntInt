@@ -49,5 +49,6 @@
     "device": "cuda",
     "save_dir": "models",
     "log_dir": "logs",
-    "num_workers": 4
+    "num_workers": 4,
+    "neighbor_threshold": 50.0
 } 

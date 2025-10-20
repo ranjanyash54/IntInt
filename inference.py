@@ -17,6 +17,7 @@ from typing import Tuple
 import pandas as pd
 from inference_model import InferenceModel
 from environment import Environment
+from scene import Scene
 
 # Set up logging
 logging.basicConfig(
@@ -102,6 +103,8 @@ class InferenceServer:
         data[one_hot_signal.columns] = one_hot_signal
         data.loc[:, 'signal'] = data['signal'].astype(int)
 
+        scene = Scene(file_path=None, scene_id=0, signal_file_path=None)
+
         for node_id in pd.unique(data['node_id']):
             node_df = data[data['node_id'] == node_id]
             node_type = node_df['node_type'].iloc[0]
@@ -140,7 +143,7 @@ class InferenceServer:
 
             self.object_coordinates[str(node_id)] = (node_values[0], node_values[1])
 
-        return node_data_dict
+        return node_data_dict, scene
     
     def process_message(self, message: Dict):
         """Process incoming message with vehicle/pedestrian coordinates."""
@@ -155,8 +158,8 @@ class InferenceServer:
         data.columns = ['frame_id', 'track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster', 'signal', 'direction_id', 'maneuver_id']
 
 
-        node_data_dict = self.process_data(data)
-        inference = self.inference_model.predict(node_data_dict)
+        node_data_dict, scene = self.process_data(data)
+        inference = self.inference_model.predict(node_data_dict, scene)
 
 
         
