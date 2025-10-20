@@ -241,7 +241,7 @@ class TrafficPredictionModel(nn.Module):
         
         return predictions
     
-    def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,
+    def encode_actors_history(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,
                 signal_tensor: torch.Tensor, target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor,
                 target_polyline_tensor: torch.Tensor, target_signal_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
         """
@@ -258,8 +258,9 @@ class TrafficPredictionModel(nn.Module):
             target_signal_tensor: [batch_size, prediction_horizon, 8] - Target signal features
             entity_type: 'veh' or 'ped'
         Returns:
-            Predicted trajectory: [batch_size, prediction_horizon, 8]
+            Final embedding: [batch_size, seq_len, spatial_attention_output_size]
         """
+
         model_key = f'{entity_type}'
         if model_key not in self.models:
             raise ValueError(f"Model for entity type '{entity_type}' not found. Available models: {list(self.models.keys())}")
@@ -321,6 +322,34 @@ class TrafficPredictionModel(nn.Module):
         
         # Add residual connection
         final_embedding = torch.cat(final_embedding, dim=-2) # [batch_size, seq_len, spatial_attention_output_size]
+        return final_embedding
+    
+    def encode_actors_target(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,
+                signal_tensor: torch.Tensor, target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor,
+                target_polyline_tensor: torch.Tensor, target_signal_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
+        """
+        Forward pass for traffic prediction.
+        
+        Args:
+            input_tensor: [batch_size, seq_len, 6] - Input sequence
+            neighbor_tensor: [batch_size, seq_len, total_neighbor_features] - Neighbor features
+            polyline_tensor: [batch_size, seq_len, 8] - Polyline features
+            signal_tensor: [batch_size, seq_len, 8] - Signal features
+            target_tensor: [batch_size, prediction_horizon, 6] - Target sequence
+            target_neighbor_tensor: [batch_size, prediction_horizon, total_neighbor_features] - Target neighbor features
+            target_polyline_tensor: [batch_size, prediction_horizon, 8] - Target polyline features
+            target_signal_tensor: [batch_size, prediction_horizon, 8] - Target signal features
+            entity_type: 'veh' or 'ped'
+        Returns:
+            Final embedding: [batch_size, prediction_horizon, spatial_attention_output_size]
+        """
+        model_key = f'{entity_type}'
+        if model_key not in self.models:
+            raise ValueError(f"Model for entity type '{entity_type}' not found. Available models: {list(self.models.keys())}")
+        
+        model = self.models[model_key]
+        neighbor_types = self.neighbor_types[entity_type]
+        batch_size, seq_len, _ = input_tensor.shape
 
         target_neighbor_features = self._process_neighbors(target_neighbor_tensor, entity_type) # [batch_size, prediction_horizon, len(neighbor_types), neighbors_per_type, features_per_neighbor]
         i = 0
@@ -349,6 +378,43 @@ class TrafficPredictionModel(nn.Module):
         embedded_target_polyline = torch.reshape(embedded_target_polyline, (batch_size, self.prediction_horizon, self.num_polylines, -1)) # [batch_size, prediction_horizon, num_polylines, polyline_encoder_output_size]
 
         embedded_target_signal = model['signal_encoder'](target_signal_tensor) # [batch_size, prediction_horizon, signal_encoder_output_size]
+
+        return target_neighbor_embedded, embedded_target_polyline, embedded_target_signal
+    
+    def forward(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,
+                signal_tensor: torch.Tensor, target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor,
+                target_polyline_tensor: torch.Tensor, target_signal_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
+        """
+        Forward pass for traffic prediction.
+        
+        Args:
+            input_tensor: [batch_size, seq_len, 6] - Input sequence
+            neighbor_tensor: [batch_size, seq_len, total_neighbor_features] - Neighbor features
+            polyline_tensor: [batch_size, seq_len, 8] - Polyline features
+            signal_tensor: [batch_size, seq_len, 8] - Signal features
+            target_tensor: [batch_size, prediction_horizon, 6] - Target sequence
+            target_neighbor_tensor: [batch_size, prediction_horizon, total_neighbor_features] - Target neighbor features
+            target_polyline_tensor: [batch_size, prediction_horizon, 8] - Target polyline features
+            target_signal_tensor: [batch_size, prediction_horizon, 8] - Target signal features
+            entity_type: 'veh' or 'ped'
+        Returns:
+            Predicted trajectory: [batch_size, prediction_horizon, 8]
+        """
+        model_key = f'{entity_type}'
+        if model_key not in self.models:
+            raise ValueError(f"Model for entity type '{entity_type}' not found. Available models: {list(self.models.keys())}")
+        
+        model = self.models[model_key]
+
+        batch_size, seq_len, _ = input_tensor.shape
+        neighbor_types = self.neighbor_types[entity_type]
+
+        
+        # TODO: Check if we need to add positional encoding to the input tensor (just like traffic bots did)
+        
+        final_embedding = self.encode_actors_history(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
+
+        target_neighbor_embedded, embedded_target_polyline, embedded_target_signal = self.encode_actors_target(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
 
         if self.temporal_decoder_type == 'rnn':
             predictions = self._rnn_decoder(model, final_embedding, target_neighbor_embedded, embedded_target_polyline, embedded_target_signal)
