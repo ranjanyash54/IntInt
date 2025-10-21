@@ -1,8 +1,10 @@
-from typing import Dict
+from typing import Dict, List
+from collections import deque
 from model import TrafficPredictor
 from data_loader import get_nearby_lane_polylines, check_if_signal_visible
 from scene import Scene
 import numpy as np
+import torch
 
 class InferenceModel:
     """
@@ -11,6 +13,10 @@ class InferenceModel:
     def __init__(self, predictor: TrafficPredictor, config: Dict):
         self.predictor = predictor
         self.config = config
+        self.node_embedding = Dict[int, deque[torch.Tensor]]
+        self.node_history_length = Dict[int, int]
+        self.sequence_length = config.get('sequence_length', 10)
+        self.predictions = Dict[int, torch.Tensor]
     
     def predict(self, node_data_dict: Dict, scene: Scene) -> Dict:
         """
@@ -25,9 +31,9 @@ class InferenceModel:
         if model_key not in self.predictor.models:
             raise ValueError(f"Model for entity type '{model_key}' not found. Available models: {list(self.predictor.models.keys())}")
 
-        model = self.predictor.models[model_key]
+        model = self.predictor.model.models[model_key]
 
-        model.eval()
+        self.predictor.model.eval()
 
         for node_id, node_data in node_data_dict.items():
             actor_type = node_data['node_type']
@@ -54,13 +60,30 @@ class InferenceModel:
 
             polyline_features, signal_visible = self.get_polyline_features(node_id, actor_data, scene)
 
+            final_embedding = model.encode_actors_history(actor_data, neighbor_data, polyline_features, signal_visible, actor_type)  # [batch_size, seq_len, spatial_attention_output_size]
 
+            
+            if node_id not in self.node_embedding:
+                self.node_embedding[node_id] = deque(torch.zeros(self.sequence_length, final_embedding.shape[-1]), maxlen=self.sequence_length)
+                self.node_history_length[node_id] = 0
+            
+            self.node_embedding[node_id].extend(final_embedding)
+            self.node_history_length[node_id] += 1
 
+            final_decoder_input = torch.stack(list(self.node_embedding[node_id]), dim=0)
+            final_decoder_input = final_decoder_input.unsqueeze(0)
 
+            prediction = self.predictor.model.run_temporal_decoder(final_decoder_input, model_key)
 
-
+            if self.node_history_length[node_id] >= self.sequence_length:
+                self.predictions[node_id] = prediction
         
-        return self.predictor.predict(node_data_dict)
+        for node_id in self.node_embedding:
+            if node_id not in node_data_dict:
+                del self.node_embedding[node_id]
+                del self.node_history_length[node_id]
+
+        return self.predictions
     
     def get_polyline_features(self, node_id: int, entity_data: Dict, scene: Scene) -> Dict:
         

@@ -145,6 +145,12 @@ class InferenceServer:
 
         return node_data_dict, scene
     
+    def polar_to_cartesian(self, current_position: Tuple[float, float], speed: float, tangent_sin: float, tangent_cos: float, dt: float) -> Tuple[float, float]:
+        """Convert polar coordinates to cartesian coordinates."""
+        x = current_position[0] + speed * tangent_cos * dt
+        y = current_position[1] + speed * tangent_sin * dt
+        return x, y
+    
     def process_message(self, message: Dict):
         """Process incoming message with vehicle/pedestrian coordinates."""
         data = json.loads(message)
@@ -159,21 +165,22 @@ class InferenceServer:
 
 
         node_data_dict, scene = self.process_data(data)
-        inference = self.inference_model.predict(node_data_dict, scene)
+        predictions = self.inference_model.predict(node_data_dict, scene)
+        timestep_str = str(timestep)
+        output_json = {timestep_str:{}}
 
-
+        for node_id, prediction in predictions.items():
+            current_position = node_data_dict[node_id]['x'], node_data_dict[node_id]['y']
+            speed = prediction[:, 0]
+            tangent_sin = prediction[:, 1]
+            tangent_cos = prediction[:, 2]
+            dt = 0.1
+            x, y = self.polar_to_cartesian(current_position, speed, tangent_sin, tangent_cos, dt)
+            angle = np.arctan2(tangent_sin, tangent_cos)
+            angle = angle.tolist()
+            output_json[timestep_str][node_id] = {'coord': list(zip(x, y)), 'angle': list(angle)}
         
-        # Run inference for entities with enough history
-        predictions = {}
-        for entity_id, history in self.history_buffer.items():
-            if len(history) >= self.sequence_length:
-                # Prepare input tensors from history
-                # TODO: Convert history to model input format
-                # pred = self.predictor.predict(input_data, entity_type)
-                # predictions[entity_id] = pred
-                pass
-        
-        return predictions
+        return output_json
     
     def run(self):
         """Run the inference server."""
