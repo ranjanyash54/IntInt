@@ -36,6 +36,10 @@ def create_parser():
                        help='Learning rate (overrides config)')
     parser.add_argument('--num_epochs', type=int, default=10,
                        help='Number of epochs (overrides config)')
+    parser.add_argument('--validate_every', type=int, default=5,
+                       help='Run validation every N epochs')
+    parser.add_argument('--train_metrics_every', type=int, default=100,
+                       help='Calculate training metrics every N batches (0 to disable)')
     
     # Logging arguments
     parser.add_argument('--log_level', type=str, default='INFO',

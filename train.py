@@ -82,7 +82,8 @@ def train_epoch(predictor: TrafficPredictor,
                 pedestrian_optimizer: optim.Optimizer,
                 criterion: nn.Module,
                 device: torch.device,
-                metrics_calculator: 'TrajectoryMetrics') -> Tuple[float, float, float, float, float, float]:
+                metrics_calculator: 'TrajectoryMetrics',
+                train_metrics_every: int = 100) -> Tuple[float, float, float, float, float, float]:
     """Train for one epoch."""
     predictor.model.train()
     
@@ -102,19 +103,24 @@ def train_epoch(predictor: TrafficPredictor,
         )
         vehicle_losses.append(loss)
         
-        # Calculate ADE and FDE
-        with torch.no_grad():
-            predictions = predictor.predict(input, 'veh')
-            input_tensor = input[0].to(predictor.device)
-            target_tensor = input[2].to(predictor.device)
-            current_state = input_tensor[:, -1, :]  # Last timestep
-            
-            ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
-            vehicle_ades.append(ade)
-            vehicle_fdes.append(fde)
+        # Calculate ADE and FDE only every N batches (to save computation)
+        if train_metrics_every > 0 and (batch_idx % train_metrics_every == 0):
+            with torch.no_grad():
+                predictions = predictor.predict(input, 'veh')
+                input_tensor = input[0].to(predictor.device)
+                target_tensor = input[2].to(predictor.device)
+                current_state = input_tensor[:, -1, :]  # Last timestep
+                
+                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+                vehicle_ades.append(ade)
+                vehicle_fdes.append(fde)
         
         current_lr = vehicle_optimizer.param_groups[0]['lr']
-        pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}", lr=f"{current_lr:.2e}")
+        # Show metrics only if we have them
+        if len(vehicle_ades) > 0:
+            pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{vehicle_ades[-1]:.4f}", fde=f"{vehicle_fdes[-1]:.4f}", lr=f"{current_lr:.2e}")
+        else:
+            pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
     
     # Train on pedestrian data (if available)
     if pedestrian_loader is not None:
@@ -126,19 +132,24 @@ def train_epoch(predictor: TrafficPredictor,
             )
             pedestrian_losses.append(loss)
             
-            # Calculate ADE and FDE
-            with torch.no_grad():
-                predictions = predictor.predict(input, 'ped')
-                input_tensor = input[0].to(predictor.device)
-                target_tensor = input[2].to(predictor.device)
-                current_state = input_tensor[:, -1, :]  # Last timestep
-                
-                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
-                pedestrian_ades.append(ade)
-                pedestrian_fdes.append(fde)
+            # Calculate ADE and FDE only every N batches (to save computation)
+            if train_metrics_every > 0 and (batch_idx % train_metrics_every == 0):
+                with torch.no_grad():
+                    predictions = predictor.predict(input, 'ped')
+                    input_tensor = input[0].to(predictor.device)
+                    target_tensor = input[2].to(predictor.device)
+                    current_state = input_tensor[:, -1, :]  # Last timestep
+                    
+                    ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+                    pedestrian_ades.append(ade)
+                    pedestrian_fdes.append(fde)
             
             current_lr = pedestrian_optimizer.param_groups[0]['lr']
-            pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}", lr=f"{current_lr:.2e}")
+            # Show metrics only if we have them
+            if len(pedestrian_ades) > 0:
+                pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{pedestrian_ades[-1]:.4f}", fde=f"{pedestrian_fdes[-1]:.4f}", lr=f"{current_lr:.2e}")
+            else:
+                pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
     
     avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
     avg_pedestrian_loss = np.mean(pedestrian_losses) if pedestrian_losses else 0.0
@@ -343,6 +354,10 @@ def main():
     
     logger.info("Starting training...")
     logger.info(f"Validation will run every {args.validate_every} epochs")
+    if args.train_metrics_every > 0:
+        logger.info(f"Training metrics (ADE/FDE) will be calculated every {args.train_metrics_every} batches")
+    else:
+        logger.info("Training metrics (ADE/FDE) calculation disabled for speed")
     start_time = time.time()
     
     for epoch in range(config['num_epochs']):
@@ -351,7 +366,7 @@ def main():
         # Training
         train_vehicle_loss, train_pedestrian_loss, train_vehicle_ade, train_vehicle_fde, train_pedestrian_ade, train_pedestrian_fde = train_epoch(
             predictor, train_vehicle_loader, train_pedestrian_loader,
-            vehicle_optimizer, pedestrian_optimizer, criterion, predictor.device, metrics_calculator
+            vehicle_optimizer, pedestrian_optimizer, criterion, predictor.device, metrics_calculator, args.train_metrics_every
         )
         
         # Validation (only every N epochs or last epoch)
