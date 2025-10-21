@@ -291,37 +291,35 @@ class TrafficPredictionModel(nn.Module):
         neighbor_embedded = torch.cat(neighbor_embedded, dim=-2) # [batch_size, seq_len, len(neighbor_types) * neighbors_per_type, features_per_neighbor]
 
         # TODO: Encoder lane polyline and signal
-        embedded_polyline = []
-        for i in range(self.sequence_length):
-            embedded_polyline_at_t = []
-            polyline_at_t = polyline_tensor[:, i, :, :, :]
-            for j in range(self.num_polylines):
-                polyline = polyline_at_t[:, j, :, :]
-                polyline_embedded, _ = model['polyline_encoder'](polyline)
-                embedded_polyline_at_t.append(polyline_embedded[:, -1, :])
-
-            embedded_polyline_at_t = torch.cat(embedded_polyline_at_t, dim=-1)
-            embedded_polyline_at_t = torch.reshape(embedded_polyline_at_t, (batch_size, self.num_polylines, -1)) # [batch_size, num_polylines, polyline_encoder_output_size]
-
-            embedded_polyline.append(embedded_polyline_at_t)
-        embedded_polyline = torch.cat(embedded_polyline, dim=-2) # [batch_size, seq_len, num_polylines * num_vectors, polyline_encoder_output_size]
-        embedded_polyline = torch.reshape(embedded_polyline, (batch_size, seq_len, self.num_polylines, -1)) # [batch_size, seq_len, num_polylines, polyline_encoder_output_size]
+        # Optimize: Process all polylines at all timesteps in one batch
+        # Reshape from [batch_size, seq_len, num_polylines, num_vectors, features] 
+        # to [batch_size * seq_len * num_polylines, num_vectors, features]
+        polyline_reshaped = polyline_tensor.view(batch_size * seq_len * self.num_polylines, 
+                                                  polyline_tensor.shape[3], 
+                                                  polyline_tensor.shape[4])
+        
+        # Process all polylines in one LSTM call
+        polyline_embedded_all, _ = model['polyline_encoder'](polyline_reshaped)
+        # Take last output: [batch_size * seq_len * num_polylines, polyline_encoder_output_size]
+        polyline_embedded_last = polyline_embedded_all[:, -1, :]
+        
+        # Reshape back to [batch_size, seq_len, num_polylines, polyline_encoder_output_size]
+        embedded_polyline = polyline_embedded_last.view(batch_size, seq_len, self.num_polylines, -1)
 
         signal_embedded = model['signal_encoder'](signal_tensor) # [batch_size, seq_len, signal_encoder_output_size]
 
-        final_embedding = []
-        for i in range(self.sequence_length):
-            neighbor_embedded_at_t = neighbor_embedded[:, i, :, :].unsqueeze(1)
-            polyline_embedded_at_t = embedded_polyline[:, i, :, :].unsqueeze(1)
-            signal_embedded_at_t = signal_embedded[:, i, :].unsqueeze(1).unsqueeze(1)
-
-            final_neighbors_at_t = torch.cat([neighbor_embedded_at_t, polyline_embedded_at_t, signal_embedded_at_t], dim=-2) # [batch_size, 1, num_polylines + num_neighbors + num_signals, features_per_neighbor]
-            actor_embedded_at_t = actor_embedded[:, i, :].unsqueeze(1)
-            final_embedding_at_t = model['neighbor_attention'](actor_embedded_at_t, final_neighbors_at_t)
-            final_embedding.append(final_embedding_at_t)
+        # Optimize: Process all timesteps in one attention call
+        # Expand signal_embedded to match the shape for concatenation
+        signal_embedded_expanded = signal_embedded.unsqueeze(2)  # [batch_size, seq_len, 1, signal_encoder_output_size]
         
-        # Add residual connection
-        final_embedding = torch.cat(final_embedding, dim=-2) # [batch_size, seq_len, spatial_attention_output_size]
+        # Concatenate all spatial features across all timesteps at once
+        final_neighbors = torch.cat([neighbor_embedded, embedded_polyline, signal_embedded_expanded], dim=2)
+        # [batch_size, seq_len, num_neighbors + num_polylines + 1, features]
+        
+        # Apply attention to all timesteps at once
+        final_embedding = model['neighbor_attention'](actor_embedded, final_neighbors)
+        # [batch_size, seq_len, spatial_attention_output_size]
+        
         return final_embedding
     
     def encode_actors_target(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,
@@ -363,19 +361,20 @@ class TrafficPredictionModel(nn.Module):
             i += 1
         target_neighbor_embedded = torch.cat(target_neighbor_embedded, dim=-2) # [batch_size, prediction_horizon, len(neighbor_types) * neighbors_per_type, features_per_neighbor]
         
-        embedded_target_polyline = []
-        for i in range(self.prediction_horizon):
-            embedded_target_polyline_at_t = []
-            target_polyline_at_t = target_polyline_tensor[:, i, :, :, :]
-            for j in range(self.num_polylines):
-                target_polyline = target_polyline_at_t[:, j, :, :]
-                target_polyline_embedded, _ = model['polyline_encoder'](target_polyline)
-                embedded_target_polyline_at_t.append(target_polyline_embedded[:, -1, :])
-            embedded_target_polyline_at_t = torch.cat(embedded_target_polyline_at_t, dim=-1)
-            embedded_target_polyline_at_t = torch.reshape(embedded_target_polyline_at_t, (batch_size, self.num_polylines, -1)) # [batch_size, num_polylines, polyline_encoder_output_size]
-            embedded_target_polyline.append(embedded_target_polyline_at_t)
-        embedded_target_polyline = torch.cat(embedded_target_polyline, dim=-2) # [batch_size, prediction_horizon, num_polylines * num_vectors, polyline_encoder_output_size]
-        embedded_target_polyline = torch.reshape(embedded_target_polyline, (batch_size, self.prediction_horizon, self.num_polylines, -1)) # [batch_size, prediction_horizon, num_polylines, polyline_encoder_output_size]
+        # Optimize: Process all target polylines at all timesteps in one batch
+        # Reshape from [batch_size, prediction_horizon, num_polylines, num_vectors, features]
+        # to [batch_size * prediction_horizon * num_polylines, num_vectors, features]
+        target_polyline_reshaped = target_polyline_tensor.view(batch_size * self.prediction_horizon * self.num_polylines,
+                                                                target_polyline_tensor.shape[3],
+                                                                target_polyline_tensor.shape[4])
+        
+        # Process all polylines in one LSTM call
+        target_polyline_embedded_all, _ = model['polyline_encoder'](target_polyline_reshaped)
+        # Take last output: [batch_size * prediction_horizon * num_polylines, polyline_encoder_output_size]
+        target_polyline_embedded_last = target_polyline_embedded_all[:, -1, :]
+        
+        # Reshape back to [batch_size, prediction_horizon, num_polylines, polyline_encoder_output_size]
+        embedded_target_polyline = target_polyline_embedded_last.view(batch_size, self.prediction_horizon, self.num_polylines, -1)
 
         embedded_target_signal = model['signal_encoder'](target_signal_tensor) # [batch_size, prediction_horizon, signal_encoder_output_size]
 
