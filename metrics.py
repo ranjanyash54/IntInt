@@ -3,20 +3,184 @@ Metrics for trajectory prediction evaluation.
 """
 
 import torch
+import torch.nn as nn
+import math
 from typing import Tuple
+
+
+class MSELoss(nn.Module):
+    """Custom MSE loss that handles missing values."""
+    
+    def __init__(self, reduction: str = 'mean'):
+        super().__init__()
+        self.reduction = reduction
+    
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Compute MSE loss, ignoring zero-padded values.
+        
+        Args:
+            predictions: [batch_size, prediction_horizon, 3]
+            targets: [batch_size, prediction_horizon, 6]
+        
+        Returns:
+            Loss value
+        """
+        # Use only first 3 columns of targets to match predictions
+        targets_subset = targets[:, :, 3:6]
+        predictions = predictions.squeeze(-2)
+        
+        # Create mask for non-zero targets (non-padded values)
+        mask = (targets_subset != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
+
+        # Compute MSE
+        mse = (predictions - targets_subset) ** 2
+        
+        # Apply mask and compute mean
+        masked_mse = mse * mask.unsqueeze(-1)  # [batch_size, prediction_horizon, 3]
+        
+        if self.reduction == 'mean':
+            # Sum over all dimensions and divide by number of non-zero elements
+            total_elements = mask.sum()
+            if total_elements > 0:
+                return masked_mse.sum() / total_elements
+            else:
+                return torch.tensor(0.0, device=predictions.device)
+        elif self.reduction == 'sum':
+            return masked_mse.sum()
+        else:
+            return masked_mse
+
+
+class GaussianNLLLoss(nn.Module):
+    """Gaussian Negative Log-Likelihood loss for delta x and delta y predictions."""
+    
+    def __init__(self, reduction: str = 'mean', dt: float = 0.1):
+        super().__init__()
+        self.reduction = reduction
+        self.dt = dt
+    
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor, 
+                current_state: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute Gaussian NLL loss for delta x and delta y.
+        
+        Args:
+            predictions: [batch_size, prediction_horizon, 4] - [mean_dx, mean_dy, log_std_dx, log_std_dy]
+            targets: [batch_size, prediction_horizon, 6] - [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
+            current_state: [batch_size, 6] - Not used, kept for API compatibility
+        
+        Returns:
+            Loss value
+        """
+        predictions = predictions.squeeze(-2)
+        
+        # Extract Gaussian parameters
+        mean_dx = predictions[:, :, 0]  # [batch_size, prediction_horizon]
+        mean_dy = predictions[:, :, 1]  # [batch_size, prediction_horizon]
+        log_std_dx = predictions[:, :, 2].clamp(min=-10.0, max=2.0)  # [batch_size, prediction_horizon]
+        log_std_dy = predictions[:, :, 3].clamp(min=-10.0, max=2.0)  # [batch_size, prediction_horizon]
+        
+        # Convert log_std to variance for numerical stability
+        var_dx = torch.exp(2 * log_std_dx)  # variance = exp(2*log_std)
+        var_dy = torch.exp(2 * log_std_dy)
+        
+        # Compute actual deltas from targets: delta = speed * tangent
+        # targets: [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
+        speed = targets[:, :, 3]  # [batch_size, prediction_horizon]
+        tangent_sin = targets[:, :, 4]  # [batch_size, prediction_horizon]
+        tangent_cos = targets[:, :, 5]  # [batch_size, prediction_horizon]
+        
+        actual_dx = speed * tangent_cos * self.dt  # [batch_size, prediction_horizon]
+        actual_dy = speed * tangent_sin * self.dt  # [batch_size, prediction_horizon]
+        
+        # Create mask for non-zero targets (non-padded values)
+        mask = (targets[:, :, :3] != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
+        
+        # Compute negative log-likelihood (numerically stable version)
+        # NLL = 0.5 * (log(2*pi) + log(var) + (x - mean)^2 / var)
+        nll_dx = 0.5 * (math.log(2 * math.pi) + 2 * log_std_dx + (actual_dx - mean_dx)**2 / (var_dx + 1e-6))
+        nll_dy = 0.5 * (math.log(2 * math.pi) + 2 * log_std_dy + (actual_dy - mean_dy)**2 / (var_dy + 1e-6))
+        
+        # Total NLL per timestep
+        nll = nll_dx + nll_dy  # [batch_size, prediction_horizon]
+        
+        # Apply mask
+        masked_nll = nll * mask
+        
+        if self.reduction == 'mean':
+            total_elements = mask.sum()
+            if total_elements > 0:
+                return masked_nll.sum() / total_elements
+            else:
+                return torch.tensor(0.0, device=predictions.device)
+        elif self.reduction == 'sum':
+            return masked_nll.sum()
+        else:
+            return masked_nll
 
 
 class TrajectoryMetrics:
     """Class for calculating trajectory prediction metrics."""
     
-    def __init__(self, dt: float = 0.1):
+    def __init__(self, dt: float = 0.1, output_distribution_type: str = 'linear'):
         """
         Initialize trajectory metrics calculator.
         
         Args:
             dt: Time step duration in seconds
+            output_distribution_type: 'linear' (speed, cos, sin) or 'gaussian' (mean_dx, mean_dy, log_std_dx, log_std_dy)
         """
         self.dt = dt
+        self.output_distribution_type = output_distribution_type
+    
+    @staticmethod
+    def gaussian_to_cartesian(current_state: torch.Tensor, predictions: torch.Tensor) -> torch.Tensor:
+        """
+        Convert Gaussian predictions (mean_dx, mean_dy, log_std_dx, log_std_dy) to cartesian coordinates.
+        
+        Args:
+            current_state: [batch_size, 6] - Current state with [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
+            predictions: [batch_size, prediction_horizon, 4] - Predictions with [mean_dx, mean_dy, log_std_dx, log_std_dy]
+        
+        Returns:
+            cartesian_trajectory: [batch_size, prediction_horizon, 2] - Trajectory in cartesian coordinates (x, y)
+        """
+        batch_size = current_state.shape[0]
+        predictions = predictions.squeeze(-2)
+        prediction_horizon = predictions.shape[1]
+        
+        # Extract current position from polar coordinates
+        r = current_state[:, 0]  # [batch_size]
+        sin_theta = current_state[:, 1]  # [batch_size]
+        cos_theta = current_state[:, 2]  # [batch_size]
+        
+        # Convert to cartesian: x = r * cos(theta), y = r * sin(theta)
+        current_x = r * cos_theta  # [batch_size]
+        current_y = r * sin_theta  # [batch_size]
+        
+        # Initialize trajectory
+        trajectory = torch.zeros(batch_size, prediction_horizon, 2, device=predictions.device)
+        
+        # Current position for tracking
+        x = current_x
+        y = current_y
+        
+        # For each prediction timestep, accumulate deltas
+        for t in range(prediction_horizon):
+            # Extract mean deltas at timestep t (ignore std for trajectory)
+            mean_dx = predictions[:, t, 0]  # [batch_size]
+            mean_dy = predictions[:, t, 1]  # [batch_size]
+            
+            # Update position
+            x = x + mean_dx
+            y = y + mean_dy
+            
+            # Store position
+            trajectory[:, t, 0] = x
+            trajectory[:, t, 1] = y
+        
+        return trajectory
     
     @staticmethod
     def polar_to_cartesian(current_state: torch.Tensor, predictions: torch.Tensor, dt: float = 0.1) -> torch.Tensor:
@@ -105,15 +269,18 @@ class TrajectoryMetrics:
         
         Args:
             current_state: [batch_size, 6] - Current state with [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
-            predictions: [batch_size, prediction_horizon, 3] - Predictions with [speed, tangent_sin, tangent_cos]
+            predictions: [batch_size, prediction_horizon, 3 or 4] - Predictions with [speed, tangent_sin, tangent_cos] or [mean_dx, mean_dy, log_std_dx, log_std_dy]
             target_tensor: [batch_size, prediction_horizon, 6] - Ground truth positions
         
         Returns:
             ade: Average Displacement Error
             fde: Final Displacement Error
         """
-        # Convert predictions to cartesian
-        pred_cartesian = self.polar_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
+        # Convert predictions to cartesian based on output type
+        if self.output_distribution_type == 'gaussian':
+            pred_cartesian = self.gaussian_to_cartesian(current_state, predictions)  # [batch_size, prediction_horizon, 2]
+        else:
+            pred_cartesian = self.polar_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
         
         # Convert targets to cartesian
         target_cartesian = self.target_to_cartesian(target_tensor)  # [batch_size, prediction_horizon, 2]

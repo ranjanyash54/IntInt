@@ -60,6 +60,8 @@ class TrafficPredictionModel(nn.Module):
         self.temporal_decoder_num_layers = config.get('temporal_decoder_num_layers', 4)
         self.temporal_decoder_dropout = config.get('temporal_decoder_dropout', 0.1)
 
+        # Output type: 'linear' (speed, cos_theta, sin_theta) or 'gaussian' (mean_dx, mean_dy, log_std_dx, log_std_dy)
+        self.output_distribution_type = config.get('output_distribution_type', 'linear')
         self.actor_decoder_output_size = config.get('actor_decoder_output_size', 3)
 
         # Check if pedestrian data is available
@@ -92,6 +94,8 @@ class TrafficPredictionModel(nn.Module):
         logger.info(f"  num_layers: {self.num_layers}")
         logger.info(f"  sequence_length: {self.sequence_length}")
         logger.info(f"  prediction_horizon: {self.prediction_horizon}")
+        logger.info(f"  output_distribution_type: {self.output_distribution_type}")
+        logger.info(f"  actor_decoder_output_size: {self.actor_decoder_output_size}")
         logger.info(f"  Has pedestrian data: {self.has_pedestrian_data}")
         logger.info(f"  Neighbor types: {self.neighbor_types}")
     
@@ -468,8 +472,12 @@ class TrafficPredictor:
         optimizer.zero_grad()
         predictions = self.model.forward(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
         
-        # Calculate loss
-        loss = criterion(predictions, target_tensor)
+        # Calculate loss - pass current_state if using GaussianNLLLoss
+        if hasattr(criterion, 'dt'):  # GaussianNLLLoss has dt attribute
+            current_state = input_tensor[:, -1, :]  # Last timestep
+            loss = criterion(predictions, target_tensor, current_state)
+        else:
+            loss = criterion(predictions, target_tensor)
         
         # Backward pass
         loss.backward()
@@ -498,8 +506,12 @@ class TrafficPredictor:
             # Forward pass
             predictions = self.model.forward(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
             
-            # Calculate loss
-            loss = criterion(predictions, target_tensor)
+            # Calculate loss - pass current_state if using GaussianNLLLoss
+            if hasattr(criterion, 'dt'):  # GaussianNLLLoss has dt attribute
+                current_state = input_tensor[:, -1, :]  # Last timestep
+                loss = criterion(predictions, target_tensor, current_state)
+            else:
+                loss = criterion(predictions, target_tensor)
             
             return loss.item()
     

@@ -23,7 +23,7 @@ from data_loader import load_environment_data, create_dataloaders
 from model import TrafficPredictor
 from environment import Environment
 from argument_parser import parse_training_args
-from metrics import TrajectoryMetrics
+from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss
 
 # Set up logging
 logging.basicConfig(
@@ -31,49 +31,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-class MSELoss(nn.Module):
-    """Custom MSE loss that handles missing values."""
-    
-    def __init__(self, reduction: str = 'mean'):
-        super().__init__()
-        self.reduction = reduction
-    
-    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Compute MSE loss, ignoring zero-padded values.
-        
-        Args:
-            predictions: [batch_size, prediction_horizon, 3]
-            targets: [batch_size, prediction_horizon, 6]
-        
-        Returns:
-            Loss value
-        """
-        # Use only first 3 columns of targets to match predictions
-        targets_subset = targets[:, :, 3:6]
-        predictions = predictions.squeeze(-2)
-        
-        # Create mask for non-zero targets (non-padded values)
-        mask = (targets_subset != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
-
-        # Compute MSE
-        mse = (predictions - targets_subset) ** 2
-        
-        # Apply mask and compute mean
-        masked_mse = mse * mask.unsqueeze(-1)  # [batch_size, prediction_horizon, 3]
-        
-        if self.reduction == 'mean':
-            # Sum over all dimensions and divide by number of non-zero elements
-            total_elements = mask.sum()
-            if total_elements > 0:
-                return masked_mse.sum() / total_elements
-            else:
-                return torch.tensor(0.0, device=predictions.device)
-        elif self.reduction == 'sum':
-            return masked_mse.sum()
-        else:
-            return masked_mse
 
 def train_epoch(predictor: TrafficPredictor, 
                 vehicle_loader: DataLoader, 
@@ -305,7 +262,13 @@ def main():
     logger.info(f"Total trainable parameters: {predictor.count_parameters():,}")
 
     # Loss function and optimizers
-    criterion = MSELoss()
+    output_distribution_type = config.get('output_distribution_type', 'linear')
+    if output_distribution_type == 'gaussian':
+        criterion = GaussianNLLLoss(dt=0.1)
+        logger.info("Using GaussianNLLLoss for Gaussian output predictions")
+    else:
+        criterion = MSELoss()
+        logger.info("Using MSELoss for linear output predictions")
     
     # Separate optimizers for vehicle and pedestrian models
     vehicle_optimizer = optim.Adam(
@@ -350,7 +313,8 @@ def main():
     }
     
     # Initialize metrics calculator
-    metrics_calculator = TrajectoryMetrics(dt=0.1)
+    output_distribution_type = config.get('output_distribution_type', 'linear')
+    metrics_calculator = TrajectoryMetrics(dt=0.1, output_distribution_type=output_distribution_type)
     
     logger.info("Starting training...")
     logger.info(f"Validation will run every {args.validate_every} epochs")
