@@ -23,7 +23,7 @@ from data_loader import load_environment_data, create_dataloaders
 from model import TrafficPredictor
 from environment import Environment
 from argument_parser import parse_training_args
-from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss
+from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss, VonMisesSpeedNLLLoss
 
 # Set up logging
 logging.basicConfig(
@@ -266,6 +266,9 @@ def main():
     if output_distribution_type == 'gaussian':
         criterion = GaussianNLLLoss(dt=0.1)
         logger.info("Using GaussianNLLLoss for Gaussian output predictions")
+    elif output_distribution_type == 'vonmises_speed':
+        criterion = VonMisesSpeedNLLLoss(dt=0.1)
+        logger.info("Using VonMisesSpeedNLLLoss for von Mises + speed predictions")
     else:
         criterion = MSELoss()
         logger.info("Using MSELoss for linear output predictions")
