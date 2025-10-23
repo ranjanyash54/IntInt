@@ -105,6 +105,38 @@ def validate_args(args):
     if args.device is not None and args.device not in ['cpu', 'cuda']:
         raise ValueError(f"Invalid device: {args.device}")
 
+def create_inference_parser():
+    """Create argument parser for inference."""
+    parser = argparse.ArgumentParser(
+        description='Run traffic prediction inference',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    # Model arguments
+    parser.add_argument('--model_path', type=str, required=True,
+                       help='Path to the trained model checkpoint')
+    parser.add_argument('--port', type=int, default=5555,
+                       help='Port for ZeroMQ server')
+    
+    return parser
+
+def parse_inference_args():
+    """Parse and validate inference arguments."""
+    parser = create_inference_parser()
+    args = parser.parse_args()
+    
+    # Set logging level
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Validate model path exists
+    if not Path(args.model_path).exists():
+        raise FileNotFoundError(f"Model file not found: {args.model_path}")
+    
+    return args
+
 def parse_training_args():
     """Parse and validate training arguments."""
     parser = create_parser()

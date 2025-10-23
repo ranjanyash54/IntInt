@@ -18,6 +18,7 @@ import pandas as pd
 from inference_model import InferenceModel
 from environment import Environment
 from scene import Scene
+from argument_parser import parse_inference_args
 
 # Set up logging
 logging.basicConfig(
@@ -207,16 +208,17 @@ class InferenceServer:
 
 
 if __name__ == "__main__":
-    # Load the model
-    model_path = "models/training_YYYY_MM_DD_HH_MM_SS/best_model.pth"
+    # Parse command line arguments
+    args = parse_inference_args()
     
-    predictor, config = load_model(model_path)
+    # Load the model
+    predictor, config = load_model(args.model_path)
     logger.info(f"Model running on: {predictor.device}")
     logger.info(f"Total parameters: {predictor.count_parameters():,}")
     
     inference_model = InferenceModel(predictor, config)
     
     # Start inference server
-    server = InferenceServer(config, inference_model, port=5555)
+    server = InferenceServer(config, inference_model, port=args.port)
     server.run()
 
