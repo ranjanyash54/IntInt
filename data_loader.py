@@ -31,6 +31,8 @@ class TrafficDataset(Dataset):
         self.max_nbr = max_nbr
         self.object_type = object_type
         self.config = config
+        self.radius_normalizing_factor = config.get('radius_normalizing_factor', 50.0)
+        self.speed_normalizing_factor = config.get('speed_normalizing_factor', 10.0)
 
         self.actor_encoder_input_size = config.get('actor_encoder_input_size', 6)
         self.neighbor_encoder_input_size = config.get('neighbor_encoder_input_size', 6)
@@ -92,7 +94,7 @@ class TrafficDataset(Dataset):
                 features = [0.0] * self.actor_encoder_input_size  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
             else:
                 features = [
-                    entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
+                    entity_data['r']/self.radius_normalizing_factor, entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed']/self.speed_normalizing_factor,
                     entity_data['tangent_sin'], entity_data['tangent_cos']
                 ]
             input_sequence.append(features)
@@ -121,7 +123,7 @@ class TrafficDataset(Dataset):
                 features = [0.0] * self.actor_encoder_input_size  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
             else:
                 features = [
-                    entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
+                    entity_data['r']/self.radius_normalizing_factor, entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed']/self.speed_normalizing_factor,
                     entity_data['tangent_sin'], entity_data['tangent_cos']
                 ]
             target_sequence.append(features)
@@ -202,10 +204,10 @@ class TrafficDataset(Dataset):
             for neighbor_id in neighbors:
                 neighbor_data = scene.get_entity_data(time, neighbor_id)
                 if neighbor_data is not None:
-                    nbr_r = neighbor_data['r']
+                    nbr_r = neighbor_data['r']/self.radius_normalizing_factor
                     nbr_sin_theta = neighbor_data['sin_theta']
                     nbr_cos_theta = neighbor_data['cos_theta']
-                    nbr_speed = neighbor_data['speed']
+                    nbr_speed = neighbor_data['speed']/self.speed_normalizing_factor
                     nbr_tangent_sin = neighbor_data['tangent_sin']
                     nbr_tangent_cos = neighbor_data['tangent_cos']
                     

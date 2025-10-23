@@ -1,5 +1,7 @@
 {
     "input_type": "polar",
+    "radius_normalizing_factor": 50.0,
+    "speed_normalizing_factor": 10.0,
     "actor_encoder_input_size": 6,
     "actor_encoder_output_size": 128,
     "neighbor_encoder_input_size": 6,

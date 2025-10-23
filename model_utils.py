@@ -59,6 +59,8 @@ def get_nearby_lane_polylines(scene: Scene, hyperparams: dict, obj_position: tup
     visible_angle_threshold = hyperparams.get('visible_polyline_angle_threshold', None)
     actor_polyline_attention_radius = hyperparams.get('actor_polyline_attention_radius', 20.0)
     actor_head_vector_head_max_diff = hyperparams.get('actor_head_vector_head_max_diff', np.pi/2)
+    radius_normalizing_factor = hyperparams.get('radius_normalizing_factor', 50.0)
+    speed_normalizing_factor = hyperparams.get('speed_normalizing_factor', 10.0)
 
 
     if len(lane_polyline_list) == 0:
@@ -95,7 +97,7 @@ def get_nearby_lane_polylines(scene: Scene, hyperparams: dict, obj_position: tup
             r, sin_theta, cos_theta = scene.convert_rectangular_to_polar(pos)
             d = vector[2]
             head = vector[-1]
-            new_vector = np.array([r, sin_theta, cos_theta, d, np.sin(head), np.cos(head)])
+            new_vector = np.array([r/radius_normalizing_factor, sin_theta, cos_theta, d/speed_normalizing_factor, np.sin(head), np.cos(head)])
             new_polyline.append(new_vector)
         new_polyline = np.array(new_polyline)
         
@@ -124,6 +126,8 @@ def check_if_signal_visible(scene: Scene, hyperparams: dict, obj_position: tuple
 
     attention_radius = hyperparams.get('actor_signal_attention_radius', 20.0)
     vector_feature_size = hyperparams.get('polyline_encoder_input_size', 6)
+    radius_normalizing_factor = hyperparams.get('radius_normalizing_factor', 50.0)
+    speed_normalizing_factor = hyperparams.get('speed_normalizing_factor', 10.0)
 
     if len(lane_end_coords) == 0:
         return np.zeros(vector_feature_size)
@@ -153,7 +157,7 @@ def check_if_signal_visible(scene: Scene, hyperparams: dict, obj_position: tuple
     threshold = attention_radius  # meters
     if cross_product > 0 and (dist_to_p1 < threshold or dist_to_p2 < threshold):
         r, sin_theta, cos_theta = scene.convert_rectangular_to_polar(p1)
-        lane_end_vector = np.array([r, sin_theta, cos_theta, lane_vector_length, np.sin(lane_vector_angle), np.cos(lane_vector_angle)])
+        lane_end_vector = np.array([r/radius_normalizing_factor, sin_theta, cos_theta, lane_vector_length/speed_normalizing_factor, np.sin(lane_vector_angle), np.cos(lane_vector_angle)])
 
         return lane_end_vector
     return np.zeros(vector_feature_size)
