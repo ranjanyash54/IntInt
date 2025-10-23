@@ -51,6 +51,71 @@ class MSELoss(nn.Module):
         else:
             return masked_mse
 
+class CosineSimilarityLoss(nn.Module):
+    """Cosine similarity loss for angle predictions."""
+    
+    def __init__(self, reduction: str = 'mean', eps: float = 1e-8):
+        super().__init__()
+        self.reduction = reduction
+        self.eps = eps
+    
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Compute cosine similarity loss.
+        
+        Args:
+            predictions: [batch_size, prediction_horizon, 3] - [speed, cos_theta, sin_theta]
+            targets: [batch_size, prediction_horizon, 3] - [speed, cos_theta, sin_theta]
+        
+        Returns:
+            Loss value
+        """
+        predictions = predictions.squeeze(-2)
+
+        # Extract speed and angle components
+        pred_speed = predictions[:, :, 0]
+        pred_c = predictions[:, :, 1]  # cos_theta
+        pred_s = predictions[:, :, 2]  # sin_theta
+        
+        true_speed = targets[:, :, 0]
+        true_c = targets[:, :, 1]  # cos_theta
+        true_s = targets[:, :, 2]  # sin_theta
+
+        # --- normalize predicted angle vector (safe & stable) ---
+        pred_vec = torch.stack([pred_c, pred_s], dim=-1)              # (..., 2)
+        pred_norm = pred_vec.norm(dim=-1, keepdim=True).clamp_min(self.eps)
+        pred_unit = pred_vec / pred_norm
+
+        # angle unit vector for ground-truth (assume already unit; renorm just in case)
+        true_vec = torch.stack([true_c, true_s], dim=-1)
+        true_unit = true_vec / true_vec.norm(dim=-1, keepdim=True).clamp_min(self.eps)
+
+        # --- angle loss: 1 - dot(unit_pred, unit_true) ---
+        dot = (pred_unit * true_unit).sum(dim=-1)                     # (...)
+        L_angle = 1.0 - dot                                           # in [0, 2]
+
+        # --- speed loss: Huber (smooth L1) ---
+        L_speed = torch.nn.functional.smooth_l1_loss(pred_speed, true_speed, reduction='none')
+
+        # --- optional: penalize deviation from unit norm (helps training) ---
+        L_norm = (pred_norm.squeeze(-1) - 1.0).pow(2)
+
+        # --- masking & reduce ---
+        # Create mask for non-zero targets (non-padded values)
+        # mask = (targets != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
+        
+        # if mask is not None:
+        #     L_angle = L_angle * mask
+        #     L_speed = L_speed * mask
+        #     L_norm = L_norm * mask
+        #     denom = mask.sum().clamp_min(1.0)
+        # else:
+        #     denom = torch.tensor(L_angle.numel(), device=L_angle.device, dtype=L_angle.dtype)
+        
+        # Combine losses (equal weighting for speed and angle, small penalty for norm)
+        loss = (L_speed.mean() + L_angle.mean() + 0.1 * L_norm.mean())
+        return loss
+
 
 class GaussianNLLLoss(nn.Module):
     """Gaussian Negative Log-Likelihood loss for delta x and delta y predictions."""
