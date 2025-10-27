@@ -26,7 +26,7 @@ class Environment:
             map_data_folder: Path to the folder containing map data (optional)
             environment_type: Type of environment ("train" or "validation")
         """
-        self.data_folder = Path(data_folder)
+        self.data_folder = Path(data_folder) if data_folder else None
         self.signal_info_folder = signal_info_folder
         self.map_data_folder = Path(map_data_folder) if map_data_folder else None
         self.environment_type = environment_type
@@ -67,7 +67,7 @@ class Environment:
     
     def _load_scenes(self):
         """Load all scene files from the data folder."""
-        if not self.data_folder.exists():
+        if not self.data_folder or not self.data_folder.exists():
             logger.warning(f"Data folder does not exist: {self.data_folder}")
             return
         

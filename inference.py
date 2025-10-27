@@ -72,13 +72,14 @@ class InferenceServer:
         self.center_point: Tuple[float, float] = (170.76, 296.75)
         self.object_coordinates: Dict[str, Tuple[float, float]] = {}
         self.inference_model = inference_model
+        self.timestep = 0
         # Setup ZeroMQ
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind(f"tcp://*:{port}")
         logger.info(f"Inference server listening on port {port}")
     
-    def cartesian_to_polar(self, delta_x: float, delta_y: float, dt: float) -> Tuple[float, float, float]:
+    def cartesian_to_polar(self, delta_x: float, delta_y: float) -> Tuple[float, float, float]:
         """Convert Cartesian coordinates to polar coordinates."""
         r = np.sqrt(delta_x**2 + delta_y**2)
         theta = np.arctan2(delta_y, delta_x)
@@ -111,15 +112,14 @@ class InferenceServer:
             node_type = node_df['node_type'].iloc[0]
             assert np.all(np.diff(node_df['frame_id']) == 1)
 
-            node_values = node_df.loc[-1, ['pos_x', 'pos_y']].values
-            signal_values = node_df.loc[-1, signals_col].values
+            node_values = node_df[['pos_x', 'pos_y']].iloc[-1].values
+            signal_values = node_df[signals_col].iloc[-1].values
             node_signal = node_df[signals_col].values
-            theta = node_df.loc[-1, 'head'].values
-            cluster = node_df.loc[-1, 'cluster']
+            theta = node_df['head'].iloc[-1]
+            cluster = node_df['cluster'].iloc[-1]
+            signal = node_df['signal'].iloc[-1]
 
-            if str(node_id) not in self.object_coordinates:
-                continue
-            else:
+            if str(node_id) in self.object_coordinates:
                 delta_x = node_values[0]-self.center_point[0]
                 delta_y = node_values[1]-self.center_point[1]
                 r, sin_theta, cos_theta = self.cartesian_to_polar(delta_x, delta_y)
@@ -136,12 +136,12 @@ class InferenceServer:
                     'speed': speed,
                     'tangent_sin': tangent_sin,
                     'tangent_cos': tangent_cos,
-                    'signal': signal_values,
+                    'signal_one_hot': signal_values,
+                    'signal': signal,
                     'cluster': cluster,
                     'node_type': node_type,
                     'theta': theta
                 }
-
             self.object_coordinates[str(node_id)] = (node_values[0], node_values[1])
 
         return node_data_dict, scene
@@ -152,13 +152,13 @@ class InferenceServer:
         y = current_position[1] + speed * tangent_sin * dt
         return x, y
     
-    def process_message(self, message: Dict):
+    def process_message(self, data: Dict):
         """Process incoming message with vehicle/pedestrian coordinates."""
-        data = json.loads(message)
         signal_phases = data[-1]
         data = data[:-1]
+        self.timestep += 1
+        # import pdb; pdb.set_trace()
         if len(data) == 0:
-            timestep += 1
             return ' '
         
         data = pd.DataFrame(data)
@@ -167,10 +167,11 @@ class InferenceServer:
 
         node_data_dict, scene = self.process_data(data)
         predictions = self.inference_model.predict(node_data_dict, scene)
-        timestep_str = str(timestep)
+        timestep_str = str(self.timestep)
         output_json = {timestep_str:{}}
 
         for node_id, prediction in predictions.items():
+            import pdb; pdb.set_trace()
             current_position = node_data_dict[node_id]['x'], node_data_dict[node_id]['y']
             speed = prediction[:, 0]
             tangent_sin = prediction[:, 1]
@@ -191,10 +192,9 @@ class InferenceServer:
             while True:
                 # Wait for message
                 message_bytes = self.socket.recv()
-                message = json.loads(message_bytes.decode('utf-8'))
-                
+                data = json.loads(message_bytes.decode('utf-8'))
                 # Process message and run inference
-                predictions = self.process_message(message)
+                predictions = self.process_message(data)
                 
                 # Send response
                 response = json.dumps(predictions)

@@ -22,7 +22,7 @@ class Scene:
             scene_id: Unique identifier for this scene
             signal_file_path: Path to the signal data file (optional)
         """
-        self.file_path = Path(file_path)
+        self.file_path = Path(file_path) if file_path else None
         self.signal_file_path = Path(signal_file_path) if signal_file_path else None
         self.scene_id = scene_id
         self.data: Optional[pd.DataFrame] = None
@@ -56,6 +56,8 @@ class Scene:
     
     def _load_raw_data(self):
         """Load data from the file and perform basic validation."""
+        if self.file_path is None:
+            return
         try:
             # Load the data file
             # The data file does not have any columns, so we must specify them manually.

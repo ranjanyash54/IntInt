@@ -77,6 +77,9 @@ class TrafficPredictionModel(nn.Module):
         # The data loader will handle filtering based on object type
         self.object_types = train_env.object_type
         self.neighbor_types = train_env.neighbor_type
+
+        self.cluster_polylines_dict = train_env.cluster_polylines_dict
+        self.lane_end_coords_dict = train_env.lane_end_coords_dict
         
         # Create models based on available data
         self.models = nn.ModuleDict({
