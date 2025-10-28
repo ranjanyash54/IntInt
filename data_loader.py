@@ -117,13 +117,14 @@ class TrafficDataset(Dataset):
 
         for t in range(time + 1, time + self.prediction_horizon + 1):
             # Get entity data for current object (all features)
+            # No need to normalize the target data
             entity_data = scene.get_entity_data(t, object_id)
             if entity_data is None:
                 # Use zero padding if data is missing
                 features = [0.0] * self.actor_encoder_input_size  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
             else:
                 features = [
-                    entity_data['r']/self.radius_normalizing_factor, entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed']/self.speed_normalizing_factor,
+                    entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
                     entity_data['tangent_sin'], entity_data['tangent_cos']
                 ]
             target_sequence.append(features)
