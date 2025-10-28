@@ -269,7 +269,7 @@ class VonMisesSpeedNLLLoss(nn.Module):
 class TrajectoryMetrics:
     """Class for calculating trajectory prediction metrics."""
     
-    def __init__(self, dt: float = 0.1, output_distribution_type: str = 'linear'):
+    def __init__(self, dt: float = 0.1, output_distribution_type: str = 'linear', evaluation_mode: bool = False, center_point: Tuple[float, float] = (0.0, 0.0)):
         """
         Initialize trajectory metrics calculator.
         
@@ -279,6 +279,8 @@ class TrajectoryMetrics:
         """
         self.dt = dt
         self.output_distribution_type = output_distribution_type
+        self.evaluation_mode = evaluation_mode
+        self.center_point = center_point
     
     @staticmethod
     def vonmises_speed_to_cartesian(current_state: torch.Tensor, predictions: torch.Tensor, dt: float = 0.1) -> torch.Tensor:
@@ -521,4 +523,18 @@ class TrajectoryMetrics:
             fde = torch.tensor(0.0, device=predictions.device)
         
         return ade.item(), fde.item()
+    
+    def calculate_eval_cartesian(self, current_state: torch.Tensor, predictions: torch.Tensor) -> Tuple[float, float]:
+        # Convert predictions to cartesian based on output type
+        if self.output_distribution_type == 'gaussian':
+            pred_cartesian = self.gaussian_to_cartesian(current_state, predictions)  # [batch_size, prediction_horizon, 2]
+        elif self.output_distribution_type == 'vonmises_speed':
+            pred_cartesian = self.vonmises_speed_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
+        else:
+            pred_cartesian = self.polar_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
+        
+        pred_cartesian = pred_cartesian + self.center_point
+
+        return pred_cartesian
+
 

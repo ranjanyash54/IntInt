@@ -49,7 +49,6 @@ class InferenceModel:
         neighbor_types_dict = self.predictor.model.neighbor_types
 
         self.predictor.model.eval()
-        logger.info(f"Predicting for {node_data_dict}")
 
         for node_id, node_data in node_data_dict.items():
             actor_type = node_data['node_type']
@@ -65,8 +64,8 @@ class InferenceModel:
                 neighbor_data[neighbor_type] = []
 
                 for (neighbor_id, distance) in neighbors:
-                    neighbor_data = node_data_dict[neighbor_id]
-                    neighbor_r, neighbor_sin_theta, neighbor_cos_theta, neighbor_speed, neighbor_tangent_sin, neighbor_tangent_cos = neighbor_data['r'], neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed'], neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_node_data = node_data_dict[neighbor_id]
+                    neighbor_r, neighbor_sin_theta, neighbor_cos_theta, neighbor_speed, neighbor_tangent_sin, neighbor_tangent_cos = neighbor_node_data['r'], neighbor_node_data['sin_theta'], neighbor_node_data['cos_theta'], neighbor_node_data['speed'], neighbor_node_data['tangent_sin'], neighbor_node_data['tangent_cos']
                     neighbor_features = [neighbor_r, neighbor_sin_theta, neighbor_cos_theta, neighbor_speed, neighbor_tangent_sin, neighbor_tangent_cos]
                     neighbor_data[neighbor_type].append(neighbor_features)
                 
@@ -99,7 +98,6 @@ class InferenceModel:
             final_decoder_input = final_decoder_input.unsqueeze(0)
 
             prediction = model.run_temporal_decoder(final_decoder_input, model_key)
-            logger.info(f"Prediction duration of node {node_id} is {self.node_history_length[node_id]}")
 
             if self.node_history_length[node_id] >= self.sequence_length:
                 self.predictions[node_id] = prediction

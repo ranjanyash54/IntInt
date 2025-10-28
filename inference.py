@@ -19,6 +19,7 @@ from inference_model import InferenceModel
 from environment import Environment
 from scene import Scene
 from argument_parser import parse_inference_args
+from metrics import TrajectoryMetrics
 
 # Set up logging
 logging.basicConfig(
@@ -73,6 +74,10 @@ class InferenceServer:
         self.object_coordinates: Dict[str, Tuple[float, float]] = {}
         self.inference_model = inference_model
         self.timestep = 0
+        self.output_distribution_type = config.get('output_distribution_type', 'linear')
+        self.trajectory_metrics = TrajectoryMetrics(dt=0.1, output_distribution_type=self.output_distribution_type, evaluation_mode=True, center_point=self.center_point)
+        self.radius_normalizing_factor = config.get('radius_normalizing_factor', 50.0)
+        self.speed_normalizing_factor = config.get('speed_normalizing_factor', 10.0)
         # Setup ZeroMQ
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
@@ -123,17 +128,18 @@ class InferenceServer:
                 delta_x = node_values[0]-self.center_point[0]
                 delta_y = node_values[1]-self.center_point[1]
                 r, sin_theta, cos_theta = self.cartesian_to_polar(delta_x, delta_y)
-                delta_x = (node_values[0]-self.object_coordinates[str(node_id)][0])/0.1
-                delta_y = (node_values[1]-self.object_coordinates[str(node_id)][1])/0.1
+                delta_x = (node_values[0]-self.object_coordinates[str(node_id)][0])
+                delta_y = (node_values[1]-self.object_coordinates[str(node_id)][1])
                 speed, tangent_sin, tangent_cos = self.cartesian_to_polar(delta_x, delta_y)
+                speed = speed/0.1
                 node_data_dict[str(node_id)] = {
                     'x': node_values[0],
                     'y': node_values[1],
                     'theta': theta,
-                    'r': r,
+                    'r': r/self.radius_normalizing_factor,
                     'sin_theta': sin_theta,
                     'cos_theta': cos_theta,
-                    'speed': speed,
+                    'speed': speed/self.speed_normalizing_factor,
                     'tangent_sin': tangent_sin,
                     'tangent_cos': tangent_cos,
                     'signal_one_hot': signal_values,
@@ -152,6 +158,23 @@ class InferenceServer:
         y = current_position[1] + speed * tangent_sin * dt
         return x, y
     
+    def calculate_next_position_linear(self, data, prediction):
+            current_position = (data['x'], data['y'])
+            speed = prediction[0]
+            tangent_sin = prediction[1]
+            tangent_cos = prediction[2]
+            delta_x = speed * tangent_cos
+            delta_y = speed * tangent_sin
+            next_x = current_position[0] + delta_x
+            next_y = current_position[1] + delta_y
+            angle = np.arctan2(delta_y.detach().numpy(), delta_x.detach().numpy())
+            return next_x, next_y, angle
+    
+    def process_prediction(self, current_position: torch.Tensor, prediction: torch.Tensor) -> Tuple[float, float]:
+        pred_cartesian = self.trajectory_metrics.calculate_eval_cartesian(current_position, prediction)
+        result = pred_cartesian.squeeze(0).squeeze(0).tolist()
+        return result[0], result[1]
+
     def process_message(self, data: Dict):
         """Process incoming message with vehicle/pedestrian coordinates."""
         signal_phases = data[-1]
@@ -171,16 +194,15 @@ class InferenceServer:
         output_json = {timestep_str:{}}
 
         for node_id, prediction in predictions.items():
-            import pdb; pdb.set_trace()
-            current_position = node_data_dict[node_id]['x'], node_data_dict[node_id]['y']
-            speed = prediction[:, 0]
-            tangent_sin = prediction[:, 1]
-            tangent_cos = prediction[:, 2]
-            dt = 0.1
-            x, y = self.polar_to_cartesian(current_position, speed, tangent_sin, tangent_cos, dt)
-            angle = np.arctan2(tangent_sin, tangent_cos)
-            angle = angle.tolist()
-            output_json[timestep_str][node_id] = {'coord': list(zip(x, y)), 'angle': list(angle)}
+            prediction = prediction.squeeze(0).squeeze(0)
+            data = node_data_dict[node_id]
+            if self.output_distribution_type == 'linear':
+                next_x, next_y, angle = self.calculate_next_position_linear(data, prediction)
+            
+            
+            output_json[timestep_str][node_id] = {'coord': [next_x.detach().numpy().tolist(), next_y.detach().numpy().tolist()], 'angle': [angle.tolist()]}
+        
+        logger.info(f"Output JSON: {output_json}")
         
         return output_json
     
