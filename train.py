@@ -32,6 +32,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+scene_center = (170.76, 296.75)
+radius_normalizing_factor = 50.0
+
+def radial_to_cartesian(radial_tensor: torch.Tensor) -> torch.Tensor:
+    """Convert radial tensor to cartesian tensor."""
+    x = radial_tensor[:, 0] * radial_tensor[:, 2]*radius_normalizing_factor + scene_center[0]
+    y = radial_tensor[:, 0] * radial_tensor[:, 1]*radius_normalizing_factor + scene_center[1]
+    return torch.stack((x, y), dim=-1)
+
 def train_epoch(predictor: TrafficPredictor, 
                 vehicle_loader: DataLoader, 
                 pedestrian_loader: DataLoader,
@@ -66,9 +75,10 @@ def train_epoch(predictor: TrafficPredictor,
                 predictions = predictor.predict(input, 'veh')
                 input_tensor = input[0].to(predictor.device)
                 target_tensor = input[2].to(predictor.device)
-                current_state = input_tensor[:, -1, :]  # Last timestep
+                current_state = input_tensor[:, -1, :3]  # Last timestep
+                current_state = radial_to_cartesian(current_state)
                 
-                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
                 vehicle_ades.append(ade)
                 vehicle_fdes.append(fde)
         
@@ -95,9 +105,10 @@ def train_epoch(predictor: TrafficPredictor,
                     predictions = predictor.predict(input, 'ped')
                     input_tensor = input[0].to(predictor.device)
                     target_tensor = input[2].to(predictor.device)
-                    current_state = input_tensor[:, -1, :]  # Last timestep
+                    current_state = input_tensor[:, -1, :3]  # Last timestep
+                    current_state = radial_to_cartesian(current_state)
                     
-                    ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+                    ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
                     pedestrian_ades.append(ade)
                     pedestrian_fdes.append(fde)
             
@@ -145,9 +156,10 @@ def validate_epoch(predictor: TrafficPredictor,
             predictions = predictor.predict(input, 'veh')
             input_tensor = input[0].to(predictor.device)
             target_tensor = input[2].to(predictor.device)
-            current_state = input_tensor[:, -1, :]  # Last timestep
+            current_state = input_tensor[:, -1, :3]  # Last timestep
+            current_state = radial_to_cartesian(current_state)
             
-            ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+            ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
             vehicle_ades.append(ade)
             vehicle_fdes.append(fde)
             
@@ -167,9 +179,10 @@ def validate_epoch(predictor: TrafficPredictor,
                 predictions = predictor.predict(input, 'ped')
                 input_tensor = input[0].to(predictor.device)
                 target_tensor = input[2].to(predictor.device)
-                current_state = input_tensor[:, -1, :]  # Last timestep
+                current_state = input_tensor[:, -1, :3]  # Last timestep
+                current_state = radial_to_cartesian(current_state)
                 
-                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor)
+                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
                 pedestrian_ades.append(ade)
                 pedestrian_fdes.append(fde)
                 
