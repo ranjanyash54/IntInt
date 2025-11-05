@@ -52,6 +52,7 @@ class TrafficPredictionModel(nn.Module):
         self.spatial_attention_input_size = config.get('spatial_attention_input_size', 128)
         self.spatial_attention_output_size = config.get('spatial_attention_output_size', 128)
         self.spatial_attention_num_heads = config.get('spatial_attention_num_heads', 8)
+        self.spatial_attention_num_layers = config.get('spatial_attention_num_layers', 1)
         self.spatial_attention_dropout = config.get('spatial_attention_dropout', 0.1)
 
         self.temporal_decoder_type = config.get('temporal_decoder_type', 'rnn')
@@ -136,7 +137,7 @@ class TrafficPredictionModel(nn.Module):
             
             # Neighbor attention layers
             'neighbor_attention': NeighborAttentionLayer(
-                self.spatial_attention_input_size, self.spatial_attention_num_heads, self.spatial_attention_dropout
+                self.spatial_attention_input_size, self.spatial_attention_num_heads, self.spatial_attention_dropout, self.spatial_attention_num_layers
             ),
 
             'polyline_encoder': nn.LSTM(self.polyline_encoder_input_size, self.polyline_encoder_output_size, dropout=self.polyline_encoder_dropout),

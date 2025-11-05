@@ -69,12 +69,15 @@ class MultiHeadAttention(nn.Module):
 class NeighborAttentionLayer(nn.Module):
     """Attention layer for processing neighbors of different types."""
     
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1, num_layers: int = 1):
         super().__init__()
         self.d_model = d_model
+        self.num_layers = num_layers
         
-        # Single attention layer for all neighbors
-        self.attention = MultiHeadAttention(d_model, num_heads, dropout)
+        # Multiple attention layers
+        self.attention_layers = nn.ModuleList([
+            MultiHeadAttention(d_model, num_heads, dropout) for _ in range(num_layers)
+        ])
         
     def forward(self, object_embedded: torch.Tensor, neighbor_embedded: torch.Tensor) -> torch.Tensor:
         """
@@ -93,10 +96,12 @@ class NeighborAttentionLayer(nn.Module):
         neighbor_embedded_reshaped = neighbor_embedded.view(-1, neighbor_embedded.size(-2), neighbor_embedded.size(-1))
         object_embedded_reshaped = object_embedded.view(-1, 1, object_embedded.size(-1))
         
-        # Apply attention: object as query, neighbors as key and value
-        attended_output, _ = self.attention(
-            object_embedded_reshaped, neighbor_embedded_reshaped, neighbor_embedded_reshaped
-        )
+        # Apply attention through all layers: object as query, neighbors as key and value
+        attended_output = object_embedded_reshaped
+        for attention in self.attention_layers:
+            attended_output, _ = attention(
+                attended_output, neighbor_embedded_reshaped, neighbor_embedded_reshaped
+            )
         
         # Reshape back
         output = attended_output.view(batch_size, seq_len, -1)
@@ -106,12 +111,16 @@ class NeighborAttentionLayer(nn.Module):
 class TemporalAttentionLayer(nn.Module):
     "Attention layer for processing temporal features."
 
-    def __init__(self, d_model: int, num_heads: int, prediction_horizon: int, max_seq_len: int = 1000, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_layers: int, prediction_horizon: int, max_seq_len: int = 1000, dropout: float = 0.1, num_heads: int = 8):
         super().__init__()
         self.d_model = d_model
         self.prediction_horizon = prediction_horizon
+        self.num_layers = num_layers
 
-        self.attention = MultiHeadAttention(d_model, num_heads, dropout)
+        # Multiple attention layers
+        self.attention_layers = nn.ModuleList([
+            MultiHeadAttention(d_model, num_heads, dropout) for _ in range(num_layers)
+        ])
         
         # Positional encoding (sinusoidal)
         self.register_buffer('pos_encoding', self._generate_positional_encoding(max_seq_len, d_model))
@@ -146,7 +155,10 @@ class TemporalAttentionLayer(nn.Module):
         key = key + self.pos_encoding[:seq_len, :].unsqueeze(0)
         value = value + self.pos_encoding[:seq_len, :].unsqueeze(0)
         
-        # Apply cross attention
-        output, attention_weights = self.attention(query, key, value, mask)
+        # Apply cross attention through all layers
+        output = query
+        attention_weights = None
+        for attention in self.attention_layers:
+            output, attention_weights = attention(output, key, value, mask)
         
         return output, attention_weights
