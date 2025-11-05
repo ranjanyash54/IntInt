@@ -9,6 +9,7 @@ import logging
 import zmq
 import json
 import numpy as np
+import pickle
 from pathlib import Path
 from collections import deque
 from typing import Dict, List
@@ -20,6 +21,7 @@ from environment import Environment
 from scene import Scene
 from argument_parser import parse_inference_args
 from metrics import TrajectoryMetrics
+from ccs_utils import process_ccs, convert_to_img_coord, cluster2attr, convert_to_CCS_coord
 
 # Set up logging
 logging.basicConfig(
@@ -159,16 +161,25 @@ class InferenceServer:
         return x, y
     
     def calculate_next_position_linear(self, data, prediction):
-            current_position = (data['x'], data['y'])
-            speed = prediction[0]
-            tangent_sin = prediction[1]
-            tangent_cos = prediction[2]
-            delta_x = speed * tangent_cos
-            delta_y = speed * tangent_sin
-            next_x = current_position[0] + delta_x
-            next_y = current_position[1] + delta_y
-            angle = np.arctan2(delta_y.detach().numpy(), delta_x.detach().numpy())
-            return next_x, next_y, angle
+        current_position = (data['x'], data['y'])
+        speed = prediction[0]
+        tangent_sin = prediction[1]
+        tangent_cos = prediction[2]
+        delta_x = speed * tangent_cos
+        delta_y = speed * tangent_sin
+        next_x = current_position[0] + delta_x
+        next_y = current_position[1] + delta_y
+        angle = np.arctan2(delta_y.detach().numpy(), delta_x.detach().numpy())
+        return next_x, next_y, angle
+    
+    def calculate_next_position_gaussian(self, data, prediction):
+        current_position = (data['x'], data['y'])
+        mean_dx = prediction[0]*self.speed_normalizing_factor
+        mean_dy = prediction[1]*self.speed_normalizing_factor
+        next_x = current_position[0] + mean_dx
+        next_y = current_position[1] + mean_dy
+        angle = np.arctan2(mean_dy.detach().numpy(), mean_dx.detach().numpy())
+        return next_x, next_y, angle
     
     def process_prediction(self, current_position: torch.Tensor, prediction: torch.Tensor) -> Tuple[float, float]:
         pred_cartesian = self.trajectory_metrics.calculate_eval_cartesian(current_position, prediction)
@@ -198,9 +209,28 @@ class InferenceServer:
             data = node_data_dict[node_id]
             if self.output_distribution_type == 'linear':
                 next_x, next_y, angle = self.calculate_next_position_linear(data, prediction)
+                next_x = next_x.detach().numpy()
+                next_y = next_y.detach().numpy()
+                
+            elif self.output_distribution_type == 'gaussian':
+                next_x, next_y, angle = self.calculate_next_position_gaussian(data, prediction)
+                next_x, next_y = next_x.detach().numpy(), next_y.detach().numpy()
             
             
-            output_json[timestep_str][node_id] = {'coord': [next_x.detach().numpy().tolist(), next_y.detach().numpy().tolist()], 'angle': [angle.tolist()]}
+            node_next_ccs, _ = convert_to_CCS_coord([(next_x, next_y)], centroid_spl[data['cluster']])
+            node_next_ccs[0][1] = 0
+            node_next_state = convert_to_img_coord(node_next_ccs, centroid_spl[data['cluster']])
+            node_next_ccs = node_next_ccs[0]
+            x_spl, y_spl = centroid_spl[data['cluster']]
+            xds, yds = x_spl.derivative(), y_spl.derivative()
+            dx, dy = xds(node_next_ccs[0]), yds(node_next_ccs[0])
+            angle = np.arctan2(dy, dx)
+            node_next_state = node_next_state[0]
+            next_x = node_next_state[0]
+            next_y = node_next_state[1]
+            
+                
+            output_json[timestep_str][node_id] = {'coord': [next_x.item(), next_y.item()], 'angle': [angle.item()]}
         
         logger.info(f"Output JSON: {output_json}")
         
@@ -232,6 +262,12 @@ class InferenceServer:
 if __name__ == "__main__":
     # Parse command line arguments
     args = parse_inference_args()
+    centroid_dict = pickle.load(open('./centroids/centroid_dict_one.p', 'rb'))
+    # startbar_dict = pickle.load(open('../../startbar_dict.p', 'rb'))
+
+    centroid_spl = centroid_dict['centroid_spl_dict']
+    cluster_map = centroid_dict['centroid_map']
+    cluster_id2name = {i: c for c, i in cluster_map.items()}
     
     # Load the model
     predictor, config = load_model(args.model_path)
