@@ -49,7 +49,11 @@ def train_epoch(predictor: TrafficPredictor,
                 criterion: nn.Module,
                 device: torch.device,
                 metrics_calculator: 'TrajectoryMetrics',
-                train_metrics_every: int = 100) -> Tuple[float, float, float, float, float, float]:
+                train_metrics_every: int = 100,
+                vehicle_scheduler: optim.lr_scheduler.LRScheduler = None,
+                pedestrian_scheduler: optim.lr_scheduler.LRScheduler = None,
+                use_wandb: bool = False,
+                global_step: int = 0) -> Tuple[float, float, float, float, float, float, int]:
     """Train for one epoch."""
     predictor.model.train()
     
@@ -68,6 +72,20 @@ def train_epoch(predictor: TrafficPredictor,
             vehicle_optimizer, criterion
         )
         vehicle_losses.append(loss)
+        
+        # Log batch loss to wandb
+        if use_wandb:
+            wandb.log({
+                'train/batch/vehicle_loss': loss,
+                'train/batch/vehicle_lr': vehicle_optimizer.param_groups[0]['lr']
+            }, step=global_step)
+        
+        # Update learning rate scheduler (transformer schedule updates per step)
+        if vehicle_scheduler is not None:
+            vehicle_scheduler.step()
+        
+        # Increment global step
+        global_step += 1
         
         # Calculate ADE and FDE only every N batches (to save computation)
         if train_metrics_every > 0 and (batch_idx % train_metrics_every == 0):
@@ -99,6 +117,20 @@ def train_epoch(predictor: TrafficPredictor,
             )
             pedestrian_losses.append(loss)
             
+            # Log batch loss to wandb
+            if use_wandb:
+                wandb.log({
+                    'train/batch/pedestrian_loss': loss,
+                    'train/batch/pedestrian_lr': pedestrian_optimizer.param_groups[0]['lr']
+                }, step=global_step)
+            
+            # Update learning rate scheduler (transformer schedule updates per step)
+            if pedestrian_scheduler is not None:
+                pedestrian_scheduler.step()
+            
+            # Increment global step
+            global_step += 1
+            
             # Calculate ADE and FDE only every N batches (to save computation)
             if train_metrics_every > 0 and (batch_idx % train_metrics_every == 0):
                 with torch.no_grad():
@@ -126,7 +158,7 @@ def train_epoch(predictor: TrafficPredictor,
     avg_pedestrian_ade = np.mean(pedestrian_ades) if pedestrian_ades else 0.0
     avg_pedestrian_fde = np.mean(pedestrian_fdes) if pedestrian_fdes else 0.0
     
-    return avg_vehicle_loss, avg_pedestrian_loss, avg_vehicle_ade, avg_vehicle_fde, avg_pedestrian_ade, avg_pedestrian_fde
+    return avg_vehicle_loss, avg_pedestrian_loss, avg_vehicle_ade, avg_vehicle_fde, avg_pedestrian_ade, avg_pedestrian_fde, global_step
 
 def validate_epoch(predictor: TrafficPredictor,
                   vehicle_loader: DataLoader,
@@ -231,12 +263,12 @@ def main():
     logger.info(f"Config saved to {config_path}")
     
     # Load environments from joblib files
-    logger.info("Loading training environment from joblib file...")
-    train_env_path = Path("output/train_environment.pkl")
+    logger.info(f"Loading training environment from joblib file: {train_data_folder}")
+    train_env_path = Path(train_data_folder)
     train_env = joblib.load(train_env_path)
     
-    logger.info("Loading validation environment from joblib file...")
-    val_env_path = Path("output/validation_environment.pkl")
+    logger.info(f"Loading validation environment from joblib file: {val_data_folder}")
+    val_env_path = Path(val_data_folder)
     val_env = joblib.load(val_env_path)
     
     # Create dataloaders
@@ -303,15 +335,37 @@ def main():
             predictor.model.models['ped'].parameters(),
             lr=config['learning_rate']
         )
-        
-        pedestrian_scheduler = optim.lr_scheduler.ExponentialLR(
-            pedestrian_optimizer, gamma=0.95
-        )
     
     # Learning rate schedulers
-    vehicle_scheduler = optim.lr_scheduler.ExponentialLR(
-        vehicle_optimizer, gamma=0.95
-    )
+    lr_scheduler_type = config.get('lr_scheduler', 'transformer')
+    warmup_steps = config.get('warmup_steps', 4000)
+    
+    if lr_scheduler_type == 'transformer':
+        # Transformer schedule from "Attention is All You Need"
+        # Formula: lr = d_model^(-0.5) * min(step^(-0.5), step * warmup_steps^(-1.5))
+        # Simplified: warmup linearly, then decay as 1/sqrt(step)
+        def transformer_lr_lambda(step):
+            """Transformer learning rate schedule from 'Attention is All You Need'."""
+            if step < warmup_steps:
+                return step / warmup_steps
+            else:
+                return (warmup_steps ** 0.5) / (step ** 0.5)
+        
+        vehicle_scheduler = optim.lr_scheduler.LambdaLR(
+            vehicle_optimizer, lr_lambda=transformer_lr_lambda
+        )
+        
+        if pedestrian_optimizer is not None:
+            pedestrian_scheduler = optim.lr_scheduler.LambdaLR(
+                pedestrian_optimizer, lr_lambda=transformer_lr_lambda
+            )
+        
+        logger.info(f"Using Transformer learning rate schedule (warmup_steps={warmup_steps})")
+    else:
+        # Default: no scheduler (or could add other schedulers here)
+        vehicle_scheduler = None
+        pedestrian_scheduler = None
+        logger.info(f"No learning rate scheduler (lr_scheduler={lr_scheduler_type})")
     
     # Training history
     history = {
@@ -343,13 +397,17 @@ def main():
         logger.info("Training metrics (ADE/FDE) calculation disabled for speed")
     start_time = time.time()
     
+    # Initialize global step counter for wandb batch logging
+    global_step = 0
+    
     for epoch in range(config['num_epochs']):
         epoch_start_time = time.time()
         
         # Training
-        train_vehicle_loss, train_pedestrian_loss, train_vehicle_ade, train_vehicle_fde, train_pedestrian_ade, train_pedestrian_fde = train_epoch(
+        train_vehicle_loss, train_pedestrian_loss, train_vehicle_ade, train_vehicle_fde, train_pedestrian_ade, train_pedestrian_fde, global_step = train_epoch(
             predictor, train_vehicle_loader, train_pedestrian_loader,
-            vehicle_optimizer, pedestrian_optimizer, criterion, predictor.device, metrics_calculator, args.train_metrics_every
+            vehicle_optimizer, pedestrian_optimizer, criterion, predictor.device, metrics_calculator, args.train_metrics_every,
+            vehicle_scheduler, pedestrian_scheduler, args.use_wandb, global_step
         )
         
         # Validation (only every N epochs or last epoch)
@@ -372,11 +430,6 @@ def main():
                 val_vehicle_loss = val_pedestrian_loss = 0.0
                 val_vehicle_ade = val_vehicle_fde = 0.0
                 val_pedestrian_ade = val_pedestrian_fde = 0.0
-        
-        # Update learning rates
-        vehicle_scheduler.step()
-        if pedestrian_scheduler is not None:
-            pedestrian_scheduler.step()
         
         # Record history
         history['train_vehicle_loss'].append(train_vehicle_loss)
