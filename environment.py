@@ -216,46 +216,6 @@ class Environment:
         
         return total_distribution
     
-    def get_environment_summary(self) -> Dict:
-        """
-        Get a comprehensive summary of the environment.
-        
-        Returns:
-            Dictionary containing environment statistics
-        """
-        summary = {
-            'environment_type': self.environment_type,
-            'data_folder': str(self.data_folder),
-            'scene_count': self.scene_count,
-            'total_timesteps': self.total_timesteps,
-            'total_objects': self.total_objects,
-            'spatial_bounds': {},
-            'time_range': {},
-            'vehicle_type_distribution': {},
-            'scenes': []
-        }
-        
-        if self.scenes:
-            # Spatial bounds
-            min_x, max_x, min_y, max_y = self.get_environment_bounds()
-            summary['spatial_bounds'] = {
-                'x_range': (min_x, max_x),
-                'y_range': (min_y, max_y)
-            }
-            
-            # Time range
-            min_time, max_time = self.get_environment_time_range()
-            summary['time_range'] = (min_time, max_time)
-            
-            # Vehicle type distribution
-            summary['vehicle_type_distribution'] = self.get_vehicle_type_distribution()
-            
-            # Individual scene summaries
-            for scene in self.scenes:
-                summary['scenes'].append(scene.get_scene_summary())
-        
-        return summary
-    
     def __len__(self) -> int:
         """Return the number of scenes in the environment."""
         return len(self.scenes)
