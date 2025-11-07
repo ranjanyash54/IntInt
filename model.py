@@ -59,6 +59,7 @@ class TrafficPredictionModel(nn.Module):
         self.temporal_decoder_input_size = config.get('temporal_decoder_input_size', 128)
         self.temporal_decoder_output_size = config.get('temporal_decoder_output_size', 128)
         self.temporal_decoder_num_layers = config.get('temporal_decoder_num_layers', 4)
+        self.temporal_decoder_num_heads = config.get('temporal_decoder_num_heads', 4)
         self.temporal_decoder_dropout = config.get('temporal_decoder_dropout', 0.1)
 
         # Output type: 'linear' (speed, cos_theta, sin_theta) or 'gaussian' (mean_dx, mean_dy, log_std_dx, log_std_dy)
@@ -125,7 +126,7 @@ class TrafficPredictionModel(nn.Module):
         if self.temporal_decoder_type == 'rnn':
             temporal_decoder = nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout)
         elif self.temporal_decoder_type == 'transformer':
-            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.temporal_decoder_num_layers, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
+            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.temporal_decoder_num_layers, self.temporal_decoder_num_heads, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
 
         model_dict = nn.ModuleDict({
             # Input embedding
@@ -140,7 +141,12 @@ class TrafficPredictionModel(nn.Module):
                 self.spatial_attention_input_size, self.spatial_attention_num_heads, self.spatial_attention_dropout, self.spatial_attention_num_layers
             ),
 
-            'polyline_encoder': nn.LSTM(self.polyline_encoder_input_size, self.polyline_encoder_output_size, dropout=self.polyline_encoder_dropout),
+            # 'polyline_encoder': nn.LSTM(self.polyline_encoder_input_size, self.polyline_encoder_output_size, dropout=self.polyline_encoder_dropout),
+            'polyline_encoder': nn.Sequential(
+                nn.Linear(self.polyline_encoder_input_size*3, self.polyline_encoder_output_size),
+                nn.LeakyReLU(),
+                nn.Dropout(self.dropout)
+            ),
 
             'signal_encoder': nn.Sequential(
                 nn.Linear(self.signal_encoder_input_size, self.signal_encoder_output_size),
@@ -215,46 +221,29 @@ class TrafficPredictionModel(nn.Module):
         
         # Get mask token and expand for batch
         mask_token = model['mask_token'](batch_size)
-        
-        # Step 1: Spatial attention for each prediction horizon with mask token
-        spatial_embeddings = []
+
+        predictions = []
         for i in range(self.prediction_horizon):
-            # Get spatial context at timestep i
+            query = mask_token
+
+            key_value = final_embedding
+            temporal_embedding_at_t, _ = model['temporal_decoder'](query, key_value, key_value)
+            prediction = model['actor_decoder'](temporal_embedding_at_t)
+            predictions.append(prediction)
+
             target_neighbor_at_t = target_neighbor_embedded[:, i, :, :].unsqueeze(1)
             target_polyline_at_t = embedded_target_polyline[:, i, :, :].unsqueeze(1)
             target_signal_at_t = embedded_target_signal[:, i, :].unsqueeze(1).unsqueeze(1)
-            
-            # Concatenate spatial features
-            spatial_context = torch.cat([target_neighbor_at_t, target_polyline_at_t, target_signal_at_t], dim=-2)
-            
-            # Apply spatial attention with mask token as query
-            spatial_embedding = model['neighbor_attention'](mask_token, spatial_context)
-            spatial_embeddings.append(spatial_embedding)
-        
-        # Stack spatial embeddings: [batch_size, prediction_horizon, d_model]
-        spatial_embeddings = torch.cat(spatial_embeddings, dim=1)
-        
-        # Step 2: Temporal attention - autoregressive for each prediction timestep
-        predictions = []
-        for i in range(self.prediction_horizon):
-            # Query: spatial embedding at current timestep
-            query = spatial_embeddings[:, i:i+1, :]
-            
-            # Key/Value: history + all previous spatial embeddings
-            if i == 0:
-                key_value = final_embedding
-            else:
-                key_value = torch.cat([final_embedding, spatial_embeddings[:, :i, :]], dim=1)
-            
-            # Apply temporal attention
-            temporal_embedding, _ = model['temporal_decoder'](query, key_value, key_value)
-            
-            # Decode to get prediction
-            prediction = model['actor_decoder'](temporal_embedding)
-            predictions.append(prediction)
-        
+            target_neighbors_at_t = torch.cat([target_neighbor_at_t, target_polyline_at_t, target_signal_at_t], dim=-2) # [batch_size, 1, num_polylines + num_neighbors + num_signals, features_per_neighbor]
+            target_embedding = model['neighbor_attention'](temporal_embedding_at_t, target_neighbors_at_t)
+
+            final_embedding = torch.cat([final_embedding, target_embedding], dim=1)
+
+
+
         return predictions
-    
+
+        
     def run_temporal_decoder(self, final_embedding: torch.Tensor, entity_type: str) -> torch.Tensor:
 
         model_key = f'{entity_type}'
@@ -332,16 +321,15 @@ class TrafficPredictionModel(nn.Module):
         # Reshape from [batch_size, seq_len, num_polylines, num_vectors, features] 
         # to [batch_size * seq_len * num_polylines, num_vectors, features]
         polyline_reshaped = polyline_tensor.view(batch_size * seq_len * self.num_polylines, 
-                                                  polyline_tensor.shape[3], 
-                                                  polyline_tensor.shape[4])
+                                                  polyline_tensor.shape[3]*polyline_tensor.shape[4])
         
         # Process all polylines in one LSTM call
-        polyline_embedded_all, _ = model['polyline_encoder'](polyline_reshaped)
+        polyline_embedded = model['polyline_encoder'](polyline_reshaped)
         # Take last output: [batch_size * seq_len * num_polylines, polyline_encoder_output_size]
-        polyline_embedded_last = polyline_embedded_all[:, -1, :]
+        # polyline_embedded_last = polyline_embedded_all[:, -1, :]
         
         # Reshape back to [batch_size, seq_len, num_polylines, polyline_encoder_output_size]
-        embedded_polyline = polyline_embedded_last.view(batch_size, seq_len, self.num_polylines, -1)
+        embedded_polyline = polyline_embedded.view(batch_size, seq_len, self.num_polylines, -1)
 
         signal_embedded = model['signal_encoder'](signal_tensor) # [batch_size, seq_len, signal_encoder_output_size]
 
@@ -402,16 +390,16 @@ class TrafficPredictionModel(nn.Module):
         # Reshape from [batch_size, prediction_horizon, num_polylines, num_vectors, features]
         # to [batch_size * prediction_horizon * num_polylines, num_vectors, features]
         target_polyline_reshaped = target_polyline_tensor.view(batch_size * self.prediction_horizon * self.num_polylines,
-                                                                target_polyline_tensor.shape[3],
+                                                                target_polyline_tensor.shape[3]*
                                                                 target_polyline_tensor.shape[4])
         
         # Process all polylines in one LSTM call
-        target_polyline_embedded_all, _ = model['polyline_encoder'](target_polyline_reshaped)
+        target_polyline_embedded = model['polyline_encoder'](target_polyline_reshaped)
         # Take last output: [batch_size * prediction_horizon * num_polylines, polyline_encoder_output_size]
-        target_polyline_embedded_last = target_polyline_embedded_all[:, -1, :]
+        # target_polyline_embedded_last = target_polyline_embedded_all[:, -1, :]
         
         # Reshape back to [batch_size, prediction_horizon, num_polylines, polyline_encoder_output_size]
-        embedded_target_polyline = target_polyline_embedded_last.view(batch_size, self.prediction_horizon, self.num_polylines, -1)
+        embedded_target_polyline = target_polyline_embedded.view(batch_size, self.prediction_horizon, self.num_polylines, -1)
 
         embedded_target_signal = model['signal_encoder'](target_signal_tensor) # [batch_size, prediction_horizon, signal_encoder_output_size]
 

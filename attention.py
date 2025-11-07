@@ -151,7 +151,9 @@ class TemporalAttentionLayer(nn.Module):
         """
         batch_size, seq_len, _ = key.shape
         
-        # Add positional encoding to keys and values
+        # Add positional encoding to query, keys and values
+        # Query is at position seq_len (next position after history)
+        query = query + self.pos_encoding[seq_len:seq_len+1, :].unsqueeze(0)
         key = key + self.pos_encoding[:seq_len, :].unsqueeze(0)
         value = value + self.pos_encoding[:seq_len, :].unsqueeze(0)
         

@@ -9,9 +9,9 @@
 
     "spatial_attention_input_size": 128,
     "spatial_attention_output_size": 128,
-    "spatial_attention_num_heads": 8,
+    "spatial_attention_num_heads": 2,
     "spatial_attention_dropout": 0.1,
-    "spatial_attention_num_layers": 4,
+    "spatial_attention_num_layers": 1,
     "spatial_attention_num_neighbors": 10,
 
     "max_polyline": 10,
