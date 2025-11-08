@@ -42,6 +42,8 @@
 
     "batch_size": 256,
     "learning_rate": 0.001,
+    "dt": 0.1,
+    "center_point": [170.76, 296.75],
     "lr_scheduler": "transformer",
     "warmup_steps": 4000,
     "num_epochs": 100,

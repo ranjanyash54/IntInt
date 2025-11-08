@@ -16,55 +16,21 @@ class Environment:
     one data file with 3000 timesteps.
     """
     
-    def __init__(self, data_folder: str, signal_info_folder: str = None, map_data_folder: str = None, environment_type: str = "train"):
+    def __init__(self, data_folder: str, signal_folder: str = None, map_folder: str = None, environment_type: str = "train"):
         """
         Initialize an Environment with scenes from a data folder.
-        
-        Args:
-            data_folder: Path to the folder containing scene files
-            signal_info_folder: Path to the folder containing signal info files (optional)
-            map_data_folder: Path to the folder containing map data (optional)
-            environment_type: Type of environment ("train" or "validation")
         """
+  
         self.data_folder = Path(data_folder) if data_folder else None
-        self.signal_info_folder = signal_info_folder
-        self.map_data_folder = Path(map_data_folder) if map_data_folder else None
+        self.signal_folder = signal_folder
+        self.map_folder = Path(map_folder) if map_folder else None
         self.environment_type = environment_type
         self.scenes: List[Scene] = []
         self.scene_count: int = 0
         self.total_timesteps: int = 0
         self.total_objects: int = 0
-        self.object_type = {
-            "veh": 0,
-            "ped": 1
-        }
-        # For each object_type, create neighbor types like vehicle_vehicle, vehicle_pedestrian, etc.
-        self.neighbor_type = {}
-        for obj_type in self.object_type:
-            self.neighbor_type[obj_type] = []
-            for other_type in self.object_type:
-                neighbor = f"{obj_type}-{other_type}"
-                self.neighbor_type[obj_type].append(neighbor)
-        
-        # Load all scenes from the folder
-        self._load_scenes()
-        if self.map_data_folder:
-            self._load_map_info()
 
-    def _load_map_info(self):
-        """Load map information from the file."""
-        if not self.map_data_folder or not self.map_data_folder.exists():
-            logger.warning("Map data folder not provided or does not exist")
-            return
 
-        cluster_polylines_info_path = self.map_data_folder / "cluster_polylines_dict.pickle"
-        with open(cluster_polylines_info_path, 'rb') as f:
-            self.cluster_polylines_dict = pickle.load(f)
-
-        lane_end_coords_info_path = self.map_data_folder / "lane_end_coords_dict.pickle"
-        with open(lane_end_coords_info_path, 'rb') as f:
-            self.lane_end_coords_dict = pickle.load(f)
-    
     def _load_scenes(self):
         """Load all scene files from the data folder."""
         if not self.data_folder or not self.data_folder.exists():
@@ -134,87 +100,7 @@ class Environment:
             if scene.file_path.name == filename:
                 return scene
         return None
-    
-    def get_all_timestep_data(self, timestep: int) -> List[pd.DataFrame]:
-        """
-        Get data for a specific timestep across all scenes.
-        
-        Args:
-            timestep: The timestep to retrieve
-            
-        Returns:
-            List of DataFrames, one for each scene at the specified timestep
-        """
-        timestep_data = []
-        for scene in self.scenes:
-            try:
-                scene_data = scene.get_timestep_data(timestep)
-                if not scene_data.empty:
-                    timestep_data.append(scene_data)
-            except Exception as e:
-                logger.warning(f"Error getting timestep {timestep} from scene {scene.scene_id}: {e}")
-        
-        return timestep_data
-    
-    def get_environment_bounds(self) -> Tuple[float, float, float, float]:
-        """
-        Get the spatial bounds across all scenes in the environment.
-        
-        Returns:
-            Tuple of (min_x, max_x, min_y, max_y) across all scenes
-        """
-        if not self.scenes:
-            return (0.0, 0.0, 0.0, 0.0)
-        
-        all_min_x, all_max_x = float('inf'), float('-inf')
-        all_min_y, all_max_y = float('inf'), float('-inf')
-        
-        for scene in self.scenes:
-            min_x, max_x, min_y, max_y = scene.get_spatial_bounds()
-            all_min_x = min(all_min_x, min_x)
-            all_max_x = max(all_max_x, max_x)
-            all_min_y = min(all_min_y, min_y)
-            all_max_y = max(all_max_y, max_y)
-        
-        return all_min_x, all_max_x, all_min_y, all_max_y
-    
-    def get_environment_time_range(self) -> Tuple[float, float]:
-        """
-        Get the time range across all scenes in the environment.
-        
-        Returns:
-            Tuple of (min_time, max_time) across all scenes
-        """
-        if not self.scenes:
-            return (0.0, 0.0)
-        
-        all_min_time, all_max_time = float('inf'), float('-inf')
-        
-        for scene in self.scenes:
-            min_time, max_time = scene.get_time_range()
-            all_min_time = min(all_min_time, min_time)
-            all_max_time = max(all_max_time, max_time)
-        
-        return all_min_time, all_max_time
-    
-    def get_vehicle_type_distribution(self) -> Dict[str, int]:
-        """
-        Get the distribution of vehicle types across all scenes.
-        
-        Returns:
-            Dictionary mapping vehicle type to total count
-        """
-        if not self.scenes:
-            return {}
-        
-        total_distribution = {}
-        
-        for scene in self.scenes:
-            scene_distribution = scene.get_vehicle_type_distribution()
-            for vehicle_type, count in scene_distribution.items():
-                total_distribution[vehicle_type] = total_distribution.get(vehicle_type, 0) + count
-        
-        return total_distribution
+
     
     def __len__(self) -> int:
         """Return the number of scenes in the environment."""

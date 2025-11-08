@@ -202,6 +202,9 @@ def create_data_processor_parser():
     parser.add_argument(
         "--output_dir", type=str, default="output", help="Output directory for data"
     )
+    parser.add_argument(
+        "--config", type=str, default="config.json", help="Path to configuration file"
+    )
     return parser
 
 
