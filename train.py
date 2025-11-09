@@ -59,72 +59,6 @@ def radial_to_cartesian(radial_tensor: torch.Tensor) -> torch.Tensor:
     y = radial_tensor[:, 0] * radial_tensor[:, 1]*radius_normalizing_factor + scene_center[1]
     return torch.stack((x, y), dim=-1)
 
-def train_epoch(predictor: TrafficPredictor, 
-                vehicle_loader: DataLoader, 
-                vehicle_optimizer: optim.Optimizer,
-                criterion: nn.Module,
-                device: torch.device,
-                metrics_calculator: 'TrajectoryMetrics',
-                train_metrics_every: int = 100,
-                vehicle_scheduler: optim.lr_scheduler.LRScheduler = None,
-                use_wandb: bool = False,
-                global_step: int = 0) -> Tuple[float, float, float, float, float, float, int]:
-    """Train for one epoch."""
-    predictor.model.train()
-    
-    vehicle_losses = []
-    vehicle_ades = []
-    vehicle_fdes = []
-    
-    # Train on vehicle data
-    pbar = tqdm(vehicle_loader, desc="Training Vehicle")
-    for batch_idx, input in enumerate(pbar):
-        loss = predictor.train_step(
-            input, 'veh',
-            vehicle_optimizer, criterion
-        )
-        vehicle_losses.append(loss)
-        
-        # Log batch loss to wandb
-        if use_wandb:
-            wandb.log({
-                'train/batch/vehicle_loss': loss,
-                'train/batch/vehicle_lr': vehicle_optimizer.param_groups[0]['lr']
-            }, step=global_step)
-        
-        # Update learning rate scheduler (transformer schedule updates per step)
-        if vehicle_scheduler is not None:
-            vehicle_scheduler.step()
-        
-        # Increment global step
-        global_step += 1
-        
-        # Calculate ADE and FDE only every N batches (to save computation)
-        if train_metrics_every > 0 and (batch_idx % train_metrics_every == 0):
-            with torch.no_grad():
-                predictions = predictor.predict(input, 'veh')
-                input_tensor = input[0].to(predictor.device)
-                target_tensor = input[2].to(predictor.device)
-                current_state = input_tensor[:, -1, :3]  # Last timestep
-                current_state = radial_to_cartesian(current_state)
-                
-                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
-                vehicle_ades.append(ade)
-                vehicle_fdes.append(fde)
-        
-        current_lr = vehicle_optimizer.param_groups[0]['lr']
-        # Show metrics only if we have them
-        if len(vehicle_ades) > 0:
-            pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{vehicle_ades[-1]:.4f}", fde=f"{vehicle_fdes[-1]:.4f}", lr=f"{current_lr:.2e}")
-        else:
-            pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
-    
-    avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
-    avg_vehicle_ade = np.mean(vehicle_ades) if vehicle_ades else 0.0
-    avg_vehicle_fde = np.mean(vehicle_fdes) if vehicle_fdes else 0.0
-    
-    return avg_vehicle_loss, avg_vehicle_ade, avg_vehicle_fde, global_step
-
 def validate_epoch(predictor: TrafficPredictor,
                   vehicle_loader: DataLoader,
                   criterion: nn.Module,
@@ -215,7 +149,7 @@ if __name__ == "__main__":
     # Create dataloaders
     logger.info("Creating dataloaders...")
     dataloaders = create_dataloaders(train_env, val_env, config)
-    train_loader, val_loader = dataloaders
+    train_veh_loader, val_veh_loader = dataloaders
     
     # Initialize model
     logger.info("Initializing model...")
@@ -305,18 +239,58 @@ if __name__ == "__main__":
     for epoch in range(config['num_epochs']):
         epoch_start_time = time.time()
 
-        for batch_idx, input in enumerate(train_loader):
+        pbar = tqdm(train_veh_loader, desc="Training Vehicle")
+        for batch_idx, input in enumerate(train_veh_loader):
+            predictor.model.train()
+            loss = predictor.train_step(
+                input, 'veh',
+                vehicle_optimizer, criterion
+            )
 
-        
-        # Training
-        train_loss, train_ade, train_fde, global_step = train_epoch(
-            predictor, train_loader,
-            vehicle_optimizer, criterion, predictor.device, metrics_calculator, args.train_metrics_every,
-            vehicle_scheduler, args.use_wandb, global_step
-        )
+            # Log batch loss to wandb
+            if args.use_wandb:
+                wandb.log({
+                    'train/batch/vehicle_loss': loss,
+                    'train/batch/vehicle_lr': vehicle_optimizer.param_groups[0]['lr']
+                }, step=global_step)
+            
+            current_lr = vehicle_optimizer.param_groups[0]['lr']
+            pbar.set_postfix(loss=f"{loss:.6f}", lr=f"{current_lr:.2e}")
+            
+            # Update learning rate scheduler (transformer schedule updates per step)
+            vehicle_scheduler.step()
+
+            # Increment global step
+            global_step += 1
+
         
         # Validation (only every N epochs or last epoch)
         should_validate = ((epoch + 1) % args.validate_every == 0) or ((epoch + 1) == config['num_epochs'])
+        if should_validate:
+            predictor.model.eval()
+            vehicle_losses = []
+            vehicle_ades = []
+            vehicle_fdes = []
+            pbar = tqdm(val_veh_loader, desc="Validating Vehicle")
+            for batch_idx, input in enumerate(val_veh_loader):
+                loss = predictor.validate(
+                    input, 'veh', criterion
+                )
+                vehicle_losses.append(loss)
+
+                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
+                vehicle_ades.append(ade)
+                vehicle_fdes.append(fde)
+
+                pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}")
+
+            avg_vehicle_loss = np.mean(vehicle_losses)
+            avg_vehicle_ade = np.mean(vehicle_ades)
+            avg_vehicle_fde = np.mean(vehicle_fdes)
+
+
+
+
         if should_validate:
             val_loss, val_ade, val_fde = validate_epoch(
                 predictor, val_loader, criterion, metrics_calculator
