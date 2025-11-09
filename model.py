@@ -21,9 +21,9 @@ class MaskToken(nn.Module):
 
 
 class TrafficPredictionModel(nn.Module):
-    """Main traffic prediction model with separate models for vehicles and pedestrians."""
+    """Main traffic prediction model."""
     
-    def __init__(self, config: Dict, train_env: Environment, val_env: Environment):
+    def __init__(self, config: dict):
         super().__init__()
         
         # Model configuration
@@ -72,32 +72,14 @@ class TrafficPredictionModel(nn.Module):
         else:
             self.actor_decoder_output_size = config.get('actor_decoder_output_size', 3)
 
-        # Check if pedestrian data is available
-        self.has_pedestrian_data = config.get('has_pedestrian_data', True)
-        
-        # Neighbor types - always include all possible types for tensor consistency
-        # The data loader will handle filtering based on object type
-        self.object_types = train_env.object_type
-        self.neighbor_types = train_env.neighbor_type
-
-        self.cluster_polylines_dict = train_env.cluster_polylines_dict
-        self.lane_end_coords_dict = train_env.lane_end_coords_dict
-        
         # Create models based on available data
         self.models = nn.ModuleDict({
-            'veh': self._create_entity_model('veh')
+            'veh': self._create_entity_model()
         })
 
         self.neighbor_models = nn.ModuleDict({
-            'veh-veh': self._create_neighbor_model('veh-veh'),
-            'veh-ped': self._create_neighbor_model('veh-ped'),
-            'ped-veh': self._create_neighbor_model('ped-veh'),
-            'ped-ped': self._create_neighbor_model('ped-ped')
+            'veh-veh': self._create_neighbor_model('veh-veh')
         })
-        
-        # Only create pedestrian model if pedestrian data is available
-        if self.has_pedestrian_data:
-            self.models['ped'] = self._create_entity_model('ped')
         
         logger.info(f"Created TrafficPredictionModel with:")
         logger.info(f"  d_model: {self.d_model}")
@@ -107,8 +89,6 @@ class TrafficPredictionModel(nn.Module):
         logger.info(f"  prediction_horizon: {self.prediction_horizon}")
         logger.info(f"  output_distribution_type: {self.output_distribution_type}")
         logger.info(f"  actor_decoder_output_size: {self.actor_decoder_output_size}")
-        logger.info(f"  Has pedestrian data: {self.has_pedestrian_data}")
-        logger.info(f"  Neighbor types: {self.neighbor_types}")
     
     def _create_neighbor_model(self, neighbor_type: str) -> nn.Module:
         """Create a model for a specific neighbor type."""
@@ -120,8 +100,8 @@ class TrafficPredictionModel(nn.Module):
             )
         })
 
-    def _create_entity_model(self, entity_type: str) -> nn.Module:
-        """Create a model for a specific entity type (vehicle or pedestrian)."""
+    def _create_entity_model(self) -> nn.Module:
+        """Create a model for a specific entity type (vehicle)."""
 
         if self.temporal_decoder_type == 'rnn':
             temporal_decoder = nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout)
@@ -455,18 +435,13 @@ class TrafficPredictionModel(nn.Module):
                        target_sequence: torch.Tensor, target_neighbor_tensor: torch.Tensor) -> torch.Tensor:
         """Predict vehicle trajectory."""
         return self.forward(input_tensor, neighbor_tensor, 'vehicle', target_sequence, target_neighbor_tensor)
-    
-    def predict_pedestrian(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor,
-                          target_sequence: torch.Tensor, target_neighbor_tensor: torch.Tensor) -> torch.Tensor:
-        """Predict pedestrian trajectory."""
-        return self.forward(input_tensor, neighbor_tensor, 'pedestrian', target_sequence, target_neighbor_tensor)
 
 class TrafficPredictor:
     """High-level wrapper for traffic prediction."""
     
-    def __init__(self, config: Dict, train_env: Environment, val_env: Environment):
+    def __init__(self, config: dict):
         self.config = config
-        self.model = TrafficPredictionModel(config, train_env, val_env)
+        self.model = TrafficPredictionModel(config)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
         
