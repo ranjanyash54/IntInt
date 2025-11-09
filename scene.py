@@ -1,8 +1,6 @@
-from turtle import pos
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
-from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,12 +28,32 @@ class Scene:
         
         # Dictionary to store processed data with (time, id) as key
         self.entity_data: dict((int, int), dict) = {}
-        
+        self.adjacency_dict: dict(int, dict(int, list[int])) = {}
+
         # Threshold distance for considering objects as neighbors
         self.neighbor_threshold: float = config['neighbor_threshold'] # Default threshold in units
 
     
-    def get_entity_data(self, time: int, entity_id: int) -> Optional[Dict]:
+    def _create_adjacency_dict(self, time: int, node_dict: dict):
+        """
+        Create adjacency dictionary for a specific timestep.
+        The adjacency dictionary is a dictionary of node_id to a list of neighbor node_ids.
+        """
+
+        adjacency_dict = {}
+        for node_id, node_data in node_dict.items():
+            adjacency_dict[node_id] = []
+            for node_id2, node_data2 in node_dict.items():
+                if node_id2 == node_id:
+                    continue
+                distance = ((node_data['x'] - node_data2['x'])**2 + (node_data['y'] - node_data2['y'])**2)**0.5
+                if distance <= self.neighbor_threshold:
+                    adjacency_dict[node_id].append((node_id2, distance))
+        
+        self.adjacency_dict[time] = adjacency_dict
+
+
+    def get_entity_data(self, time: int, entity_id: int) -> dict:
         """
         Get entity data for a specific time and entity ID.
         
@@ -48,67 +66,21 @@ class Scene:
         """
         return self.entity_data.get((time, entity_id))
     
-    def _calculate_entity_adjacency(self, source_entities: pd.DataFrame, target_entities: pd.DataFrame, 
-                                   edge_type: str, timestep: int):
+    def get_neighbors(self, timestep: int, entity_id: int) -> list[int]:
         """
-        Calculate adjacency list for a specific edge type at a given timestep.
-        
-        Args:
-            source_entities: DataFrame of source entities
-            target_entities: DataFrame of target entities
-            edge_type: Type of edge ('veh-veh', 'veh-ped', 'ped-veh', 'ped-ped')
-            timestep: Current timestep
-        """
-        if source_entities.empty or target_entities.empty:
-            return
-        
-        # For each source entity, find neighboring target entities
-        for _, source_entity in source_entities.iterrows():
-            source_id = source_entity['id']
-            source_pos = (source_entity['x'], source_entity['y'])
-            
-            neighbors = []
-            
-            # Check distance to each target entity
-            for _, target_entity in target_entities.iterrows():
-                target_id = target_entity['id']
-                
-                # Skip self-connections (for same entity type)
-                if source_id == target_id:
-                    continue
-                
-                target_pos = (target_entity['x'], target_entity['y'])
-                
-                # Calculate Euclidean distance
-                distance = ((source_pos[0] - target_pos[0])**2 + 
-                          (source_pos[1] - target_pos[1])**2)**0.5
-                
-                # Add to neighbors if within threshold
-                if distance <= self.neighbor_threshold:
-                    neighbors.append(target_id)
-            
-            # Store the adjacency list
-            self.adjacency_lists[edge_type][timestep][source_id] = neighbors
-    
-    def get_neighbors(self, timestep: int, entity_id: int, edge_type: str) -> List[int]:
-        """
-        Get neighbors for a specific entity at a given timestep and edge type.
+        Get neighbors for a specific entity at a given timestep.
         
         Args:
             timestep: Timestep to query
             entity_id: Entity ID
-            edge_type: Type of edge ('veh-veh', 'veh-ped', 'ped-veh', 'ped-ped')
-            
         Returns:
             List of neighbor entity IDs
         """
-        if edge_type not in self.adjacency_lists:
+        
+        if timestep not in self.adjacency_dict or entity_id not in self.adjacency_dict[timestep]:
             return []
         
-        if timestep not in self.adjacency_lists[edge_type]:
-            return []
-        
-        return self.adjacency_lists[edge_type][timestep].get(entity_id, [])
+        return self.adjacency_dict[timestep][entity_id]
     
     
     def convert_rectangular_to_polar(self, pos : Tuple[float, float]) -> Tuple[float, float, float]:

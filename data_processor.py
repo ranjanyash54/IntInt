@@ -10,6 +10,7 @@ from scene import Scene
 from argument_parser import parse_data_processor_args
 import json
 import pickle
+from joblib import dump
 
 # Set up logging
 logging.basicConfig(
@@ -32,10 +33,10 @@ class TrafficDataProcessor:
     def initialize_folders(self):
         self.data_folder = Path(self.data_root) / "raw"
         self.data_train_folder = self.data_folder / "train"
-        self.data_validation_folder = self.data_folder / "validation"
+        self.data_validation_folder = self.data_folder / "val"
         self.signal_folder = Path(self.data_root) / "signal"
         self.signal_train_folder = self.signal_folder / "train"
-        self.signal_validation_folder = self.signal_folder / "validation"
+        self.signal_validation_folder = self.signal_folder / "val"
         self.map_folder = Path(self.data_root) / "map_info"
 
     def _load_map_info(self):
@@ -71,7 +72,7 @@ class TrafficDataProcessor:
         return entity_df[['vx', 'vy']].values
     
     def scan_data_files(self, run_type: str = "train") -> Tuple[Environment, Environment]:
-        logger.info("Starting to scan data files and create environments...")
+        logger.info(f"\n\nStarting to scan data files and create environments for {run_type} environment")
 
         # Create training environment
         # Find all txt files in the folder
@@ -93,10 +94,12 @@ class TrafficDataProcessor:
         cluster_polylines_dict, lane_end_coords_dict = self._load_map_info()
 
         for scene_id, data_file_path in enumerate(sorted(data_files)):
+            scene_object_count = 0
             scene = Scene(scene_id, config=self.config)
             scene.map_info = [cluster_polylines_dict, lane_end_coords_dict] # tuple of (cluster_polylines_dict, lane_end_coords_dict)
 
             filename = Path(data_file_path).name
+            logger.info(f"Processing scene {scene_id} from {filename}")
 
             # Process the signal data
             signal_file_path = signal_files_dict.get(filename)
@@ -128,6 +131,7 @@ class TrafficDataProcessor:
                 if len(entity_df) < self.config['sequence_length']:
                     id_to_drop.append(id)
                     continue
+                scene_object_count += 1
                 vel_array = self._update_entity_kinematics(entity_df.copy().reset_index(drop=True))
                 entity_df[['vx', 'vy']] = vel_array
                 data.loc[data['id'] == id, ['vx', 'vy']] = vel_array
@@ -157,9 +161,19 @@ class TrafficDataProcessor:
             data = data[~data['id'].isin(id_to_drop)]
 
             for time, snapshot in data.groupby('time'):
-                import pdb; pdb.set_trace()
                 node_dict = snapshot.set_index('id')[['x', 'y']].to_dict("index")
-                scene.create_adjacency_dict(time, node_dict)
+                scene._create_adjacency_dict(time, node_dict)
+
+            scene.unique_objects = scene_object_count
+            scene.timesteps = len(data['time'].unique())
+            logger.info(f"Scene {scene_id} has {scene_object_count} objects and {scene.timesteps} timesteps")
+        
+            env.scenes.append(scene)
+            env.scene_count += 1
+            env.total_objects += scene_object_count
+            env.total_timesteps += scene.timesteps
+
+        return env
 
 
 if __name__ == "__main__":
@@ -177,7 +191,8 @@ if __name__ == "__main__":
     processor = TrafficDataProcessor(data_root=data_root, config=config)
 
     # Scan all data files and create environments
-    train_env, validation_env = processor.scan_data_files()
+    train_env = processor.scan_data_files(run_type="train")
+    validation_env = processor.scan_data_files(run_type="val")
 
     # Create output directory if it doesn't exist
     output_dir = Path(args.output_dir)
@@ -186,18 +201,13 @@ if __name__ == "__main__":
     # Dump train environment
     if processor.train_environment and len(processor.train_environment) > 0:
         train_output_path = output_dir / "train_environment.pkl"
-        processor.train_environment.save_to_file(str(train_output_path))
+        dump(train_env, train_output_path)
         print(f"✓ Train environment saved to: {train_output_path}")
 
     # Dump validation environment
     if processor.validation_environment and len(processor.validation_environment) > 0:
         validation_output_path = output_dir / "validation_environment.pkl"
-        try:
-            processor.validation_environment.save_to_file(str(validation_output_path))
-            print(f"✓ Validation environment saved to: {validation_output_path}")
-        except Exception as e:
-            print(f"✗ Failed to save validation environment: {e}")
-    else:
-        print("⚠ No validation environment to save")
+        dump(validation_env, validation_output_path)
+        print(f"✓ Validation environment saved to: {validation_output_path}")
 
     print(f"\nEnvironment files saved to: {output_dir.absolute()}")
