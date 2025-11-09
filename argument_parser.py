@@ -100,40 +100,6 @@ def create_parser():
     return parser
 
 
-def load_config(config_path: str) -> dict:
-    """Load configuration from JSON file."""
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-        logger.info(f"Loaded configuration from {config_path}")
-        return config
-    except FileNotFoundError:
-        logger.error(f"Configuration file not found: {config_path}")
-        raise
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in configuration file: {e}")
-        raise
-
-
-def override_config_with_args(config: dict, args) -> dict:
-    """Override config values with command line arguments."""
-    overrides = {
-        "num_workers": args.num_workers,
-        "device": args.device,
-        "batch_size": args.batch_size,
-        "learning_rate": args.learning_rate,
-        "num_epochs": args.num_epochs,
-        "save_dir": args.save_dir,
-    }
-
-    for key, value in overrides.items():
-        if value is not None:
-            config[key] = value
-            logger.info(f"Overriding {key} to {value}")
-
-    return config
-
-
 def validate_args(args):
     """Validate command line arguments."""
     # Check if config file exists
@@ -150,6 +116,22 @@ def validate_args(args):
     # Validate device
     if args.device is not None and args.device not in ["cpu", "cuda"]:
         raise ValueError(f"Invalid device: {args.device}")
+
+def parse_training_args():
+    """Parse and validate training arguments."""
+    parser = create_parser()
+    args = parser.parse_args()
+
+    # Set logging level
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    # Validate arguments
+    validate_args(args)
+
+    return args
 
 
 def create_inference_parser():
@@ -214,27 +196,6 @@ def parse_data_processor_args():
     args = parser.parse_args()
 
     return args
-
-
-def parse_training_args():
-    """Parse and validate training arguments."""
-    parser = create_parser()
-    args = parser.parse_args()
-
-    # Set logging level
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    # Load and override config
-    config = load_config(args.config)
-    config = override_config_with_args(config, args)
-
-    # Validate arguments
-    validate_args(args)
-
-    return args, config
 
 
 def print_usage_examples():

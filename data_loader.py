@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 class TrafficDataset(Dataset):
     """Dataset for traffic prediction using scene, object, and time data."""
     
-    def __init__(self, data_list: List[Tuple[int, int, int]], environment: Environment, 
-                 sequence_length: int = 10, prediction_horizon: int = 5, max_nbr: int = 10, config: Dict = None, object_type: str = 'veh'):
+    def __init__(self, data_list: list[tuple[int, int, int]], environment: Environment, 
+                 sequence_length: int = 10, prediction_horizon: int = 5, max_nbr: int = 10, config: dict = None):
         """
         Initialize the dataset.
         
@@ -29,7 +29,6 @@ class TrafficDataset(Dataset):
         self.sequence_length = sequence_length
         self.prediction_horizon = prediction_horizon
         self.max_nbr = max_nbr
-        self.object_type = object_type
         self.config = config
         self.radius_normalizing_factor = config.get('radius_normalizing_factor', 50.0)
         self.speed_normalizing_factor = config.get('speed_normalizing_factor', 10.0)
@@ -37,48 +36,20 @@ class TrafficDataset(Dataset):
         self.actor_encoder_input_size = config.get('actor_encoder_input_size', 6)
         self.neighbor_encoder_input_size = config.get('neighbor_encoder_input_size', 6)
 
-        # Filter valid samples (with enough history and future)
-        self.valid_samples = self._filter_valid_samples()
         
-        logger.info(f"Created dataset with {len(self.valid_samples)} valid samples")
+        logger.info(f"Created dataset with {len(self.data_list)} samples")
         logger.info(f"Max neighbors per type: {self.max_nbr}")
     
-    def _filter_valid_samples(self) -> List[Tuple[int, int, int]]:
-        """Filter samples that have enough history and future data."""
-        valid_samples = []
-        
-        for scene_id, object_id, time in self.data_list:
-            scene = self.environment.get_scene(scene_id)
-            if scene is None:
-                continue
-            
-            # Check if we have enough history
-            if time < self.sequence_length:
-                continue
-            
-            # Check if we have enough future data
-            max_time = scene.data['time'].max()
-            if time + self.prediction_horizon > max_time:
-                continue
-            
-            # Check if object exists at this time
-            entity_data = scene.get_entity_data(time, object_id)
-            if entity_data is None:
-                continue
-            
-            valid_samples.append((scene_id, object_id, time))
-        
-        return valid_samples
     
     def __len__(self) -> int:
-        return len(self.valid_samples)
+        return len(self.data_list)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get a sample from the dataset."""
-        scene_id, object_id, time = self.valid_samples[idx]
+        scene_id, object_id, time = self.data_list[idx]
         scene = self.environment.get_scene(scene_id)
 
-        lane_end_coords_dict = self.environment.lane_end_coords_dict
+        cluster_polylines_dict, lane_end_coords_dict = scene.map_info
 
         # Get input sequence (history)
         input_sequence = []
@@ -241,47 +212,22 @@ class TrafficDataset(Dataset):
         
         return flattened
 
-def load_environment_data(data_folder: str, environment_type: str) -> Environment:
-    """Load environment data from folder."""
-    try:
-        environment = Environment(data_folder, environment_type)
-        logger.info(f"Loaded {environment_type} environment with {len(environment)} scenes")
-        return environment
-    except Exception as e:
-        logger.error(f"Failed to load {environment_type} environment: {e}")
-        raise
-
-def create_data_lists(environment: Environment) -> Tuple[List[Tuple[int, int, int]], List[Tuple[int, int, int]]]:
+def create_data_lists(environment: Environment) -> list[tuple[int, int, int]]:
     """Create lists of (scene_id, object_id, time) tuples for vehicles and pedestrians."""
-    vehicle_samples = []
-    pedestrian_samples = []
+    samples = []
     
     for scene in environment:
         # Get all unique objects and times
-        scene_data = scene.data
-        unique_objects = scene_data['id'].unique()
+        scene_data = scene.entity_data
         
-        for object_id in unique_objects:
-            object_data = scene_data[scene_data['id'] == object_id]
-            vehicle_type = object_data['vehicle_type'].iloc[0]
+        for object_id, time in scene_data.keys():
+            samples.append((scene.scene_id, object_id, time))
             
-            # Get all timesteps for this object
-            timesteps = object_data['time'].unique()
-            
-            # Create samples for each timestep
-            for time in timesteps:
-                sample = (scene.scene_id, int(object_id), int(time))
-                
-                if vehicle_type == 0.0:  # Vehicle
-                    vehicle_samples.append(sample)
-                elif vehicle_type == 1.0:  # Pedestrian
-                    pedestrian_samples.append(sample)
-    
-    logger.info(f"Created {len(vehicle_samples)} vehicle samples and {len(pedestrian_samples)} pedestrian samples")
-    return vehicle_samples, pedestrian_samples
+    logger.info(f"Created {len(samples)} samples")
+    return samples
 
 def create_dataloaders(train_env: Environment, val_env: Environment, 
-                      config: Dict) -> Tuple[DataLoader, DataLoader, DataLoader, DataLoader]:
+                      config: Dict) -> tuple[DataLoader, DataLoader]:
     """
     Create PyTorch DataLoaders for training and validation.
     
@@ -291,65 +237,36 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         Note: pedestrian loaders will be None if no pedestrian data is available
     """
     # Create data lists
-    train_vehicle_samples, train_pedestrian_samples = create_data_lists(train_env)
-    val_vehicle_samples, val_pedestrian_samples = create_data_lists(val_env)
+    train_veh_samples = create_data_lists(train_env)
+    val_veh_samples = create_data_lists(val_env)
     
     # Check if we have any pedestrian data
-    has_train_pedestrians = len(train_pedestrian_samples) > 0
-    has_val_pedestrians = len(val_pedestrian_samples) > 0
     
     logger.info(f"Data availability:")
-    logger.info(f"  Training vehicles: {len(train_vehicle_samples)} samples")
-    logger.info(f"  Training pedestrians: {len(train_pedestrian_samples)} samples")
-    logger.info(f"  Validation vehicles: {len(val_vehicle_samples)} samples")
-    logger.info(f"  Validation pedestrians: {len(val_pedestrian_samples)} samples")
+    logger.info(f"  Training samples: {len(train_veh_samples)} samples")
+    logger.info(f"  Validation samples: {len(val_veh_samples)} samples")
     
-    # Create vehicle datasets
-    train_vehicle_dataset = TrafficDataset(
-        train_vehicle_samples, train_env,
+    # Create datasets
+    train_veh_dataset = TrafficDataset(
+        train_veh_samples, train_env,
         sequence_length=config['sequence_length'],
         prediction_horizon=config['prediction_horizon'],
         max_nbr=config['max_nbr'],
         config=config,
-        object_type='veh'
     )
     
-    val_vehicle_dataset = TrafficDataset(
-        val_vehicle_samples, val_env,
+    val_veh_dataset = TrafficDataset(
+        val_veh_samples, val_env,
         sequence_length=config['sequence_length'],
         prediction_horizon=config['prediction_horizon'],
         max_nbr=config['max_nbr'],
         config=config,
-        object_type='veh'
     )
     
-    # Create pedestrian datasets only if data is available
-    train_pedestrian_dataset = None
-    val_pedestrian_dataset = None
-    
-    if has_train_pedestrians:
-        train_pedestrian_dataset = TrafficDataset(
-            train_pedestrian_samples, train_env,
-            sequence_length=config['sequence_length'],
-            prediction_horizon=config['prediction_horizon'],
-            max_nbr=config['max_nbr'],
-            config=config,
-            object_type='ped'
-        )
-    
-    if has_val_pedestrians:
-        val_pedestrian_dataset = TrafficDataset(
-            val_pedestrian_samples, val_env,
-            sequence_length=config['sequence_length'],
-            prediction_horizon=config['prediction_horizon'],
-            max_nbr=config['max_nbr'],
-            config=config,
-            object_type='ped'
-        )
     
     # Create dataloaders
-    train_vehicle_loader = DataLoader(
-        train_vehicle_dataset, 
+    train_veh_loader = DataLoader(
+        train_veh_dataset, 
         batch_size=config['batch_size'], 
         shuffle=True,
         num_workers=config.get('num_workers', 0),
@@ -357,8 +274,8 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         persistent_workers=False if config.get('num_workers', 0) == 0 else True
     )
     
-    val_vehicle_loader = DataLoader(
-        val_vehicle_dataset, 
+    val_veh_loader = DataLoader(
+        val_veh_dataset, 
         batch_size=config['batch_size'], 
         shuffle=False,
         num_workers=config.get('num_workers', 0),
@@ -366,34 +283,8 @@ def create_dataloaders(train_env: Environment, val_env: Environment,
         persistent_workers=False if config.get('num_workers', 0) == 0 else True
     )
     
-    # Create pedestrian dataloaders only if datasets exist
-    train_pedestrian_loader = None
-    val_pedestrian_loader = None
-    
-    if train_pedestrian_dataset is not None:
-        train_pedestrian_loader = DataLoader(
-            train_pedestrian_dataset, 
-            batch_size=config['batch_size'], 
-            shuffle=True,
-            num_workers=config.get('num_workers', 0),
-            pin_memory=True if config.get('device', 'cpu') == 'cuda' else False,
-            persistent_workers=False if config.get('num_workers', 0) == 0 else True
-        )
-    
-    if val_pedestrian_dataset is not None:
-        val_pedestrian_loader = DataLoader(
-            val_pedestrian_dataset, 
-            batch_size=config['batch_size'], 
-            shuffle=False,
-            num_workers=config.get('num_workers', 0),
-            pin_memory=True if config.get('device', 'cpu') == 'cuda' else False,
-            persistent_workers=False if config.get('num_workers', 0) == 0 else True
-        )
-    
     logger.info(f"Created dataloaders:")
-    logger.info(f"  Train vehicles: {len(train_vehicle_loader)} batches")
-    logger.info(f"  Train pedestrians: {len(train_pedestrian_loader) if train_pedestrian_loader else 0} batches")
-    logger.info(f"  Val vehicles: {len(val_vehicle_loader)} batches")
-    logger.info(f"  Val pedestrians: {len(val_pedestrian_loader) if val_pedestrian_loader else 0} batches")
+    logger.info(f"  Train samples: {len(train_veh_loader)} batches")
+    logger.info(f"  Val samples: {len(val_veh_loader)} batches")
     
-    return train_vehicle_loader, train_pedestrian_loader, val_vehicle_loader, val_pedestrian_loader 
+    return train_veh_loader, val_veh_loader 
