@@ -11,6 +11,7 @@ from argument_parser import parse_data_processor_args
 import json
 import pickle
 from joblib import dump
+import time
 
 # Set up logging
 logging.basicConfig(
@@ -161,8 +162,10 @@ class TrafficDataProcessor:
             data = data[~data['id'].isin(id_to_drop)]
 
             for time, snapshot in data.groupby('time'):
-                node_dict = snapshot.set_index('id')[['x', 'y']].to_dict("index")
-                scene._create_adjacency_dict(time, node_dict)
+                node_dict = snapshot.set_index('id')[['x', 'y', 'cluster']].to_dict("index")
+                scene._create_neighbor_adjacency_dict(time, node_dict)
+                scene._create_map_adjacency_dict(time, node_dict)
+                scene._create_signal_adjacency_dict(time, node_dict)
 
             scene.unique_objects = scene_object_count
             scene.timesteps = len(data['time'].unique())
@@ -177,6 +180,8 @@ class TrafficDataProcessor:
 
 
 if __name__ == "__main__":
+    print("Starting data processor...")
+    time_start = time.time()
     args = parse_data_processor_args()
 
     config_path = Path(args.config)
@@ -211,3 +216,5 @@ if __name__ == "__main__":
         print(f"✓ Validation environment saved to: {validation_output_path}")
 
     print(f"\nEnvironment files saved to: {output_dir.absolute()}")
+    time_end = time.time()
+    print(f"Time taken: {time_end - time_start} seconds")

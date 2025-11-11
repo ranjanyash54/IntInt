@@ -29,12 +29,16 @@ class Scene:
         # Dictionary to store processed data with (time, id) as key
         self.entity_data: dict((int, int), dict) = {}
         self.adjacency_dict: dict(int, dict(int, list[int])) = {}
+        self.map_adjacency_dict: dict(int, dict(int, list[int])) = {}
+        self.signal_adjacency_dict: dict(int, dict(int, list[int])) = {}
 
         # Threshold distance for considering objects as neighbors
         self.neighbor_threshold: float = config['neighbor_threshold'] # Default threshold in units
+        self.polyline_attention_radius: float = config['polyline_attention_radius'] # Default radius in units
+        self.signal_attention_radius: float = config['signal_attention_radius'] # Default radius in units
 
     
-    def _create_adjacency_dict(self, time: int, node_dict: dict):
+    def _create_neighbor_adjacency_dict(self, time: int, node_dict: dict):
         """
         Create adjacency dictionary for a specific timestep.
         The adjacency dictionary is a dictionary of node_id to a list of neighbor node_ids.
@@ -51,6 +55,43 @@ class Scene:
                     adjacency_dict[node_id].append((node_id2, distance))
         
         self.adjacency_dict[time] = adjacency_dict
+
+    def _create_map_adjacency_dict(self, time: int, node_dict: dict):
+        cluster_polylines_dict = self.map_info[0]
+
+        adjacency_dict = {}
+        for node_id, node_data in node_dict.items():
+            adjacency_dict[node_id] = []
+            cluster_id = node_data['cluster']
+            polylines = cluster_polylines_dict.get(cluster_id, [])
+            for polyline in polylines:
+                for vector in polyline:
+                    distance = ((node_data['x'] - vector[0])**2 + (node_data['y'] - vector[1])**2)**0.5
+                    if distance <= self.polyline_attention_radius:
+                        # vector_angle = (vector[-1]+2*np.pi) % (2*np.pi)
+                        # head = (head+2*np.pi) % (2*np.pi)
+                        adjacency_dict[node_id].append((polyline, distance))
+                        break
+        self.map_adjacency_dict[time] = adjacency_dict
+    
+    def _create_signal_adjacency_dict(self, time: int, node_dict: dict):
+        """
+        Create adjacency dictionary for a specific timestep.
+        The adjacency dictionary is a dictionary of node_id to a list of neighbor node_ids.
+        """
+        lane_end_coords_dict = self.map_info[1]
+        
+        adjacency_dict = {}
+        for node_id, node_data in node_dict.items():
+            adjacency_dict[node_id] = []
+            cluster_id = node_data['cluster']
+            lane_end_coords = lane_end_coords_dict.get(cluster_id, [])
+            for lane_end_coord in lane_end_coords:
+                distance = ((node_data['x'] - lane_end_coord[0])**2 + (node_data['y'] - lane_end_coord[1])**2)**0.5
+                if distance <= self.signal_attention_radius:
+                    adjacency_dict[node_id].append(lane_end_coord)
+                    break
+        self.signal_adjacency_dict[time] = adjacency_dict
 
 
     def get_entity_data(self, time: int, entity_id: int) -> dict:
@@ -69,12 +110,6 @@ class Scene:
     def get_neighbors(self, timestep: int, entity_id: int) -> list[int]:
         """
         Get neighbors for a specific entity at a given timestep.
-        
-        Args:
-            timestep: Timestep to query
-            entity_id: Entity ID
-        Returns:
-            List of neighbor entity IDs
         """
         
         if timestep not in self.adjacency_dict or entity_id not in self.adjacency_dict[timestep]:
@@ -82,7 +117,22 @@ class Scene:
         
         return self.adjacency_dict[timestep][entity_id]
     
+    def get_map_neighbors(self, timestep: int, entity_id: int) -> list[int]:
+        """
+        Get map neighbors for a specific entity at a given timestep.
+        """
+        if timestep not in self.map_adjacency_dict or entity_id not in self.map_adjacency_dict[timestep]:
+            return []
+        return self.map_adjacency_dict[timestep][entity_id]
     
+    def get_signal_neighbors(self, timestep: int, entity_id: int) -> list[int]:
+        """
+        Get signal neighbors for a specific entity at a given timestep.
+        """
+        if timestep not in self.signal_adjacency_dict or entity_id not in self.signal_adjacency_dict[timestep]:
+            return []
+        return self.signal_adjacency_dict[timestep][entity_id]
+
     def convert_rectangular_to_polar(self, pos : Tuple[float, float]) -> Tuple[float, float, float]:
         """
         Convert rectangular coordinates to polar coordinates.
