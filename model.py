@@ -151,29 +151,6 @@ class TrafficPredictionModel(nn.Module):
         
         return model_dict
 
-    def _process_neighbors(self, neighbor_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
-        """
-        Process neighbor tensor to separate different neighbor types.
-        
-        Args:
-            neighbor_tensor: [batch_size, seq_len, total_neighbor_features]
-                           where total_neighbor_features = 4 * max_nbr * 5 (5 features per neighbor)
-        
-        Returns:
-            Dict with neighbor type as key and features as value
-        """
-        batch_size, seq_len, _ = neighbor_tensor.shape
-        features_per_neighbor = self.neighbor_encoder_input_size
-        neighbors_per_type = self.max_nbr
-        
-        # Reshape to separate neighbor types
-        # Each neighbor type has max_nbr neighbors, each with 5 features
-        neighbor_tensor_reshaped = neighbor_tensor.view(
-            batch_size, seq_len, len(self.neighbor_types[entity_type]), neighbors_per_type, features_per_neighbor
-        )
-        
-        return neighbor_tensor_reshaped
-
     def _rnn_decoder(self, model, final_embedding, target_neighbor_embedded, embedded_target_polyline, embedded_target_signal, prediction_horizon: int):
         """Decoder for traffic prediction."""
 
@@ -218,7 +195,7 @@ class TrafficPredictionModel(nn.Module):
             target_embedding = model['neighbor_attention'](temporal_embedding_at_t, target_neighbors_at_t)
 
             final_embedding = torch.cat([final_embedding, target_embedding], dim=1)
-
+            # TODO: Should I remove the first embedding
 
 
         return predictions
@@ -272,49 +249,24 @@ class TrafficPredictionModel(nn.Module):
             raise ValueError(f"Model for entity type '{entity_type}' not found. Available models: {list(self.models.keys())}")
         
         model = self.models[model_key]
-
         batch_size, seq_len, _ = input_tensor.shape
-        
-        # TODO: Check if we need to add positional encoding to the input tensor (just like traffic bots did)
         
         # Embed input features
         actor_embedded = model['actor_encoder'](input_tensor)  # [batch_size, seq_len, d_model]
         
-        # Process neighbors
-        neighbor_features = self._process_neighbors(neighbor_tensor, entity_type) # [batch_size, seq_len, len(neighbor_types), neighbors_per_type, features_per_neighbor]
-        
         # Apply neighbor attention
-        neighbor_types = self.neighbor_types[entity_type]
-        i = 0
-        neighbor_embedded = []
-        for neighbor_type in neighbor_types:
-            neighbor_model = self.neighbor_models[neighbor_type]
-            neighbor_type_tensor = neighbor_features[:, :, i, :, :]
-            
-            neighbor_type_embedded = neighbor_model['neighbor_encoder'](neighbor_type_tensor)
-            neighbor_embedded.append(neighbor_type_embedded)
-            i += 1
-        neighbor_embedded = torch.cat(neighbor_embedded, dim=-2) # [batch_size, seq_len, len(neighbor_types) * neighbors_per_type, features_per_neighbor]
+        neighbor_model = self.neighbor_models[f'{entity_type}-{entity_type}']
+        neighbor_embedded = neighbor_model['neighbor_encoder'](neighbor_tensor)
 
-        # TODO: Encoder lane polyline and signal
         # Optimize: Process all polylines at all timesteps in one batch
         # Reshape from [batch_size, seq_len, num_polylines, num_vectors, features] 
         # to [batch_size * seq_len * num_polylines, num_vectors, features]
         polyline_reshaped = polyline_tensor.view(batch_size * seq_len * self.num_polylines, 
                                                   polyline_tensor.shape[3]*polyline_tensor.shape[4])
-        
-        # Process all polylines in one LSTM call
         polyline_embedded = model['polyline_encoder'](polyline_reshaped)
-        # Take last output: [batch_size * seq_len * num_polylines, polyline_encoder_output_size]
-        # polyline_embedded_last = polyline_embedded_all[:, -1, :]
-        
-        # Reshape back to [batch_size, seq_len, num_polylines, polyline_encoder_output_size]
         embedded_polyline = polyline_embedded.view(batch_size, seq_len, self.num_polylines, -1)
 
         signal_embedded = model['signal_encoder'](signal_tensor) # [batch_size, seq_len, signal_encoder_output_size]
-
-        # Optimize: Process all timesteps in one attention call
-        # Expand signal_embedded to match the shape for concatenation
         signal_embedded_expanded = signal_embedded.unsqueeze(2)  # [batch_size, seq_len, 1, signal_encoder_output_size]
         
         # Concatenate all spatial features across all timesteps at once
@@ -327,17 +279,12 @@ class TrafficPredictionModel(nn.Module):
         
         return final_embedding
     
-    def encode_actors_target(self, input_tensor: torch.Tensor, neighbor_tensor: torch.Tensor, polyline_tensor: torch.Tensor,
-                signal_tensor: torch.Tensor, target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor,
+    def encode_actors_target(self, target_tensor: torch.Tensor, target_neighbor_tensor: torch.Tensor,
                 target_polyline_tensor: torch.Tensor, target_signal_tensor: torch.Tensor, entity_type: str) -> torch.Tensor:
         """
         Forward pass for traffic prediction.
         
         Args:
-            input_tensor: [batch_size, seq_len, 6] - Input sequence
-            neighbor_tensor: [batch_size, seq_len, total_neighbor_features] - Neighbor features
-            polyline_tensor: [batch_size, seq_len, 8] - Polyline features
-            signal_tensor: [batch_size, seq_len, 8] - Signal features
             target_tensor: [batch_size, prediction_horizon, 6] - Target sequence
             target_neighbor_tensor: [batch_size, prediction_horizon, total_neighbor_features] - Target neighbor features
             target_polyline_tensor: [batch_size, prediction_horizon, 8] - Target polyline features
@@ -351,37 +298,21 @@ class TrafficPredictionModel(nn.Module):
             raise ValueError(f"Model for entity type '{entity_type}' not found. Available models: {list(self.models.keys())}")
         
         model = self.models[model_key]
-        neighbor_types = self.neighbor_types[entity_type]
-        batch_size, seq_len, _ = input_tensor.shape
+        batch_size, seq_len, _ = target_tensor.shape
 
-        target_neighbor_features = self._process_neighbors(target_neighbor_tensor, entity_type) # [batch_size, prediction_horizon, len(neighbor_types), neighbors_per_type, features_per_neighbor]
-        i = 0
-        target_neighbor_embedded = []
+        neighbor_model = self.neighbor_models[f'{entity_type}-{entity_type}']
+        target_neighbor_embedded = neighbor_model['neighbor_encoder'](target_neighbor_tensor)
 
-        for neighbor_type in neighbor_types:
-            neighbor_model = self.neighbor_models[neighbor_type]
-            target_neighbor_type_tensor = target_neighbor_features[:, :, i, :, :]
-            target_neighbor_type_embedded = neighbor_model['neighbor_encoder'](target_neighbor_type_tensor)
-            target_neighbor_embedded.append(target_neighbor_type_embedded)
-            i += 1
-        target_neighbor_embedded = torch.cat(target_neighbor_embedded, dim=-2) # [batch_size, prediction_horizon, len(neighbor_types) * neighbors_per_type, features_per_neighbor]
-        
+
         # Optimize: Process all target polylines at all timesteps in one batch
         # Reshape from [batch_size, prediction_horizon, num_polylines, num_vectors, features]
         # to [batch_size * prediction_horizon * num_polylines, num_vectors, features]
         target_polyline_reshaped = target_polyline_tensor.view(batch_size * self.prediction_horizon * self.num_polylines,
                                                                 target_polyline_tensor.shape[3]*
                                                                 target_polyline_tensor.shape[4])
-        
-        # Process all polylines in one LSTM call
         target_polyline_embedded = model['polyline_encoder'](target_polyline_reshaped)
-        # Take last output: [batch_size * prediction_horizon * num_polylines, polyline_encoder_output_size]
-        # target_polyline_embedded_last = target_polyline_embedded_all[:, -1, :]
-        
-        # Reshape back to [batch_size, prediction_horizon, num_polylines, polyline_encoder_output_size]
         embedded_target_polyline = target_polyline_embedded.view(batch_size, self.prediction_horizon, self.num_polylines, -1)
-
-        embedded_target_signal = model['signal_encoder'](target_signal_tensor) # [batch_size, prediction_horizon, signal_encoder_output_size]
+        embedded_target_signal = model['signal_encoder'](target_signal_tensor)
 
         return target_neighbor_embedded, embedded_target_polyline, embedded_target_signal
     
@@ -410,15 +341,10 @@ class TrafficPredictionModel(nn.Module):
         
         model = self.models[model_key]
 
-        batch_size, seq_len, _ = input_tensor.shape
-        neighbor_types = self.neighbor_types[entity_type]
-
-        
-        # TODO: Check if we need to add positional encoding to the input tensor (just like traffic bots did)
         
         final_embedding = self.encode_actors_history(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, entity_type)  # [batch_size, seq_len, spatial_attention_output_size]
 
-        target_neighbor_embedded, embedded_target_polyline, embedded_target_signal = self.encode_actors_target(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)  # [batch_size, prediction_horizon, len(neighbor_types) * neighbors_per_type, features_per_neighbor], [batch_size, prediction_horizon, num_polylines, polyline_encoder_output_size], [batch_size, prediction_horizon, signal_encoder_output_size]
+        target_neighbor_embedded, embedded_target_polyline, embedded_target_signal = self.encode_actors_target(target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)  # [batch_size, prediction_horizon, len(neighbor_types) * neighbors_per_type, features_per_neighbor], [batch_size, prediction_horizon, num_polylines, polyline_encoder_output_size], [batch_size, prediction_horizon, signal_encoder_output_size]
 
         if self.temporal_decoder_type == 'rnn':
             predictions = self._rnn_decoder(model, final_embedding, target_neighbor_embedded, embedded_target_polyline, embedded_target_signal, self.prediction_horizon)
@@ -452,12 +378,14 @@ class TrafficPredictor:
         """Perform one training step."""
         self.model.train()
         
-        (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor) = input
+        input_tensor, input_norm_tensor, target_tensor, target_norm_tensor, neighbor_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor = input
 
         # Move to device
         input_tensor = input_tensor.to(self.device)
+        input_norm_tensor = input_norm_tensor.to(self.device)
         neighbor_tensor = neighbor_tensor.to(self.device)
         target_tensor = target_tensor.to(self.device)
+        target_norm_tensor = target_norm_tensor.to(self.device)
         target_neighbor_tensor = target_neighbor_tensor.to(self.device)
         polyline_tensor = polyline_tensor.to(self.device)
         target_polyline_tensor = target_polyline_tensor.to(self.device)
@@ -466,14 +394,10 @@ class TrafficPredictor:
 
         # Forward pass
         optimizer.zero_grad()
-        predictions = self.model.forward(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
+        predictions = self.model.forward(input_norm_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_norm_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
         
-        # Calculate loss - pass current_state if using GaussianNLLLoss
-        if hasattr(criterion, 'dt'):  # GaussianNLLLoss has dt attribute
-            current_state = input_tensor[:, -1, :]  # Last timestep
-            loss = criterion(predictions, target_tensor, current_state)
-        else:
-            loss = criterion(predictions, target_tensor)
+        # Calculate loss
+        loss = criterion(predictions, target_tensor)
         
         # Backward pass
         loss.backward()
@@ -486,13 +410,16 @@ class TrafficPredictor:
         """Perform validation."""
         self.model.eval()
 
-        (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor) = input
+        
+        input_tensor, input_norm_tensor, target_tensor, target_norm_tensor, neighbor_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor = input
 
         with torch.no_grad():
             # Move to device
             input_tensor = input_tensor.to(self.device)
+            input_norm_tensor = input_norm_tensor.to(self.device)
             neighbor_tensor = neighbor_tensor.to(self.device)
             target_tensor = target_tensor.to(self.device)
+            target_norm_tensor = target_norm_tensor.to(self.device)
             target_neighbor_tensor = target_neighbor_tensor.to(self.device)
             polyline_tensor = polyline_tensor.to(self.device)
             signal_tensor = signal_tensor.to(self.device)
@@ -500,14 +427,10 @@ class TrafficPredictor:
             target_signal_tensor = target_signal_tensor.to(self.device)
             
             # Forward pass
-            predictions = self.model.forward(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
+            predictions = self.model.forward(input_norm_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_norm_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
             
-            # Calculate loss - pass current_state if using GaussianNLLLoss
-            if hasattr(criterion, 'dt'):  # GaussianNLLLoss has dt attribute
-                current_state = input_tensor[:, -1, :]  # Last timestep
-                loss = criterion(predictions, target_tensor, current_state)
-            else:
-                loss = criterion(predictions, target_tensor)
+            # Calculate loss
+            loss = criterion(predictions, target_tensor)
             
             return loss.item()
     
@@ -515,12 +438,14 @@ class TrafficPredictor:
         """Make predictions."""
         self.model.eval()
 
-        (input_tensor, neighbor_tensor, target_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor) = input
+        input_tensor, input_norm_tensor, target_tensor, target_norm_tensor, neighbor_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor = input
         with torch.no_grad():
             # Move to device
             input_tensor = input_tensor.to(self.device)
+            input_norm_tensor = input_norm_tensor.to(self.device)
             neighbor_tensor = neighbor_tensor.to(self.device)
             target_tensor = target_tensor.to(self.device)
+            target_norm_tensor = target_norm_tensor.to(self.device)
             target_neighbor_tensor = target_neighbor_tensor.to(self.device)
             polyline_tensor = polyline_tensor.to(self.device)
             target_polyline_tensor = target_polyline_tensor.to(self.device)
@@ -528,7 +453,7 @@ class TrafficPredictor:
             target_signal_tensor = target_signal_tensor.to(self.device)
             
             # Forward pass
-            predictions = self.model.forward(input_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
+            predictions = self.model.forward(input_norm_tensor, neighbor_tensor, polyline_tensor, signal_tensor, target_norm_tensor, target_neighbor_tensor, target_polyline_tensor, target_signal_tensor, entity_type)
             
             return predictions
     
