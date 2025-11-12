@@ -106,7 +106,7 @@ class Scene:
         Returns:
             Dictionary containing entity data or None if not found
         """
-        return self.entity_data.get((time, entity_id))
+        return self.entity_data.get((entity_id, time))
     
     def get_neighbors(self, timestep: int, entity_id: int) -> list[int]:
         """

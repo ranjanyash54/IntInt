@@ -61,8 +61,8 @@ class TrafficDataProcessor:
         Update the kinematics of a specific entity DataFrame.
         """
 
-        entity_df['vx'] = entity_df['x'].diff()
-        entity_df['vy'] = entity_df['y'].diff()
+        entity_df['vx'] = entity_df['x'].diff()/self.config['dt']
+        entity_df['vy'] = entity_df['y'].diff()/self.config['dt']
         if len(entity_df) > 1: # Handle the first row
             entity_df.loc[0, 'vx'] = entity_df.loc[1, 'vx'] 
             entity_df.loc[0, 'vy'] = entity_df.loc[1, 'vy']
@@ -138,7 +138,7 @@ class TrafficDataProcessor:
                 data.loc[data['id'] == id, ['vx', 'vy']] = vel_array
 
                 for index, row in entity_df.iterrows():
-                    time = row['time']
+                    time = int(row['time'])
                     x = row['x']
                     y = row['y']
                     theta = row['theta']
@@ -162,6 +162,7 @@ class TrafficDataProcessor:
             data = data[~data['id'].isin(id_to_drop)]
 
             for time, snapshot in data.groupby('time'):
+                time = int(time)
                 node_dict = snapshot.set_index('id')[['x', 'y', 'cluster']].to_dict("index")
                 scene._create_neighbor_adjacency_dict(time, node_dict)
                 scene._create_map_adjacency_dict(time, node_dict)
