@@ -50,54 +50,6 @@ def override_config_with_args(config: dict, args) -> dict:
 
     return config
 
-scene_center = (170.76, 296.75)
-radius_normalizing_factor = 50.0
-
-def radial_to_cartesian(radial_tensor: torch.Tensor) -> torch.Tensor:
-    """Convert radial tensor to cartesian tensor."""
-    x = radial_tensor[:, 0] * radial_tensor[:, 2]*radius_normalizing_factor + scene_center[0]
-    y = radial_tensor[:, 0] * radial_tensor[:, 1]*radius_normalizing_factor + scene_center[1]
-    return torch.stack((x, y), dim=-1)
-
-def validate_epoch(predictor: TrafficPredictor,
-                  vehicle_loader: DataLoader,
-                  criterion: nn.Module,
-                  metrics_calculator: TrajectoryMetrics) -> Tuple[float, float, float, float, float, float]:
-    """Validate for one epoch."""
-    predictor.model.eval()
-    
-    vehicle_losses = []
-    vehicle_ades = []
-    vehicle_fdes = []
-    
-    # Validate on vehicle data
-    with torch.no_grad():
-        pbar = tqdm(vehicle_loader, desc="Validating Vehicle")
-        for batch_idx, input in enumerate(pbar):
-            loss = predictor.validate(
-                input, 'veh', criterion
-            )
-            vehicle_losses.append(loss)
-            
-            # Calculate ADE and FDE
-            predictions = predictor.predict(input, 'veh')
-            input_tensor = input[0].to(predictor.device)
-            target_tensor = input[2].to(predictor.device)
-            current_state = input_tensor[:, -1, :3]  # Last timestep
-            current_state = radial_to_cartesian(current_state)
-            
-            ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
-            vehicle_ades.append(ade)
-            vehicle_fdes.append(fde)
-            
-            pbar.set_postfix(loss=f"{loss:.6f}", ade=f"{ade:.4f}", fde=f"{fde:.4f}")
-    
-    avg_vehicle_loss = np.mean(vehicle_losses) if vehicle_losses else 0.0
-    avg_vehicle_ade = np.mean(vehicle_ades) if vehicle_ades else 0.0
-    avg_vehicle_fde = np.mean(vehicle_fdes) if vehicle_fdes else 0.0
-    
-    return avg_vehicle_loss, avg_vehicle_ade, avg_vehicle_fde
-
 if __name__ == "__main__":
     """Main training function."""
     # Parse arguments and load configuration
@@ -167,16 +119,16 @@ if __name__ == "__main__":
     # Loss function and optimizers
     output_distribution_type = config.get('output_distribution_type', 'linear')
     if output_distribution_type == 'gaussian':
-        criterion = GaussianNLLLoss(dt=0.1)
+        criterion = GaussianNLLLoss(config)
         logger.info("Using GaussianNLLLoss for Gaussian output predictions")
     elif output_distribution_type == 'vonmises_speed':
-        criterion = VonMisesSpeedNLLLoss(dt=0.1)
+        criterion = VonMisesSpeedNLLLoss(config)
         logger.info("Using VonMisesSpeedNLLLoss for von Mises + speed predictions")
     elif output_distribution_type == 'cosine':
-        criterion = CosineSimilarityLoss()
+        criterion = CosineSimilarityLoss(config)
         logger.info("Using CosineSimilarityLoss for cosine similarity predictions")
     else:
-        criterion = MSELoss()
+        criterion = MSELoss(config)
         logger.info("Using MSELoss for linear output predictions")
     
     vehicle_optimizer = optim.Adam(
@@ -217,13 +169,12 @@ if __name__ == "__main__":
         'val_vehicle_loss': [],
         'val_vehicle_ade': [],
         'val_vehicle_fde': [],
-        'best_val_loss': float('inf'),
+        'best_val_loss': np.inf,
         'patience_counter': 0
     }
     
     # Initialize metrics calculator
-    output_distribution_type = config.get('output_distribution_type', 'linear')
-    metrics_calculator = TrajectoryMetrics(dt=0.1, output_distribution_type=output_distribution_type)
+    metrics_calculator = TrajectoryMetrics(config)
     
     logger.info("Starting training...")
     logger.info(f"Validation will run every {args.validate_every} epochs")
@@ -239,8 +190,8 @@ if __name__ == "__main__":
     for epoch in range(config['num_epochs']):
         epoch_start_time = time.time()
 
-        pbar = tqdm(train_veh_loader, desc="Training Vehicle")
-        for batch_idx, input in enumerate(train_veh_loader):
+        pbar = tqdm(train_veh_loader, desc=f"Training Vehicle epoch {epoch+1}/{config['num_epochs']}")
+        for batch_idx, input in enumerate(pbar):
             predictor.model.train()
             loss = predictor.train_step(
                 input, 'veh',
@@ -263,7 +214,6 @@ if __name__ == "__main__":
             # Increment global step
             global_step += 1
 
-        
         # Validation (only every N epochs or last epoch)
         should_validate = ((epoch + 1) % args.validate_every == 0) or ((epoch + 1) == config['num_epochs'])
         if should_validate:
@@ -272,13 +222,13 @@ if __name__ == "__main__":
             vehicle_ades = []
             vehicle_fdes = []
             pbar = tqdm(val_veh_loader, desc="Validating Vehicle")
-            for batch_idx, input in enumerate(val_veh_loader):
-                loss = predictor.validate(
+            for batch_idx, input in enumerate(pbar):
+                loss, predictions = predictor.validate(
                     input, 'veh', criterion
                 )
                 vehicle_losses.append(loss)
 
-                ade, fde = metrics_calculator.calculate_ade_fde(current_state, predictions, target_tensor, scene_center)
+                ade, fde = metrics_calculator.calculate_ade_fde(input[0], input[2], predictions)
                 vehicle_ades.append(ade)
                 vehicle_fdes.append(fde)
 
@@ -288,59 +238,44 @@ if __name__ == "__main__":
             avg_vehicle_ade = np.mean(vehicle_ades)
             avg_vehicle_fde = np.mean(vehicle_fdes)
 
-
-
-
-        if should_validate:
-            val_loss, val_ade, val_fde = validate_epoch(
-                predictor, val_loader, criterion, metrics_calculator
-            )
+            history['val_vehicle_loss'].append(avg_vehicle_loss)
+            history['val_vehicle_ade'].append(avg_vehicle_ade)
+            history['val_vehicle_fde'].append(avg_vehicle_fde)
         else:
             # Use previous validation metrics if not validating this epoch
-                if len(history['val_loss']) > 0:
-                val_loss = history['val_loss'][-1]
-                val_ade = history['val_ade'][-1]
-                val_fde = history['val_fde'][-1]
+            if len(history['val_vehicle_loss']) > 0:
+                avg_vehicle_loss = history['val_vehicle_loss'][-1]
+                avg_vehicle_ade = history['val_vehicle_ade'][-1]
+                avg_vehicle_fde = history['val_vehicle_fde'][-1]
             else:
                 # First epoch, no previous values
-                val_loss = 0.0
-                val_ade = 0.0
-                val_fde = 0.0
+                history['val_vehicle_loss'].append(0.0)
+                history['val_vehicle_ade'].append(0.0)
+                history['val_vehicle_fde'].append(0.0)
+                avg_vehicle_loss = 0.0
+                avg_vehicle_ade = 0.0
+                avg_vehicle_fde = 0.0
         
-        # Record history
-        history['train_loss'].append(train_loss)
-        history['train_ade'].append(train_ade)
-        history['train_fde'].append(train_fde)
-        history['val_loss'].append(val_loss)
-        history['val_ade'].append(val_ade)
-        history['val_fde'].append(val_fde)
-        
-        # Calculate average validation loss and early stopping (only when validating)
-        if should_validate:
-            avg_val_loss = val_loss
+        # Early stopping check
+        if avg_vehicle_loss < history['best_val_loss']:
+            history['best_val_loss'] = avg_vehicle_loss
+            history['patience_counter'] = 0
             
-            # Early stopping check
-            if avg_val_loss < history['best_val_loss']:
-                history['best_val_loss'] = avg_val_loss
-                history['patience_counter'] = 0
-                
-                # Save best model
-                best_model_path = output_dir / "best_model.pth"
-                predictor.save_model(str(best_model_path))
-                logger.info(f"New best model saved with validation loss: {avg_val_loss:.6f}")
-            else:
-                history['patience_counter'] += 1
+            # Save best model
+            best_model_path = output_dir / "best_model.pth"
+            predictor.save_model(str(best_model_path))
+            logger.info(f"New best model saved with validation loss: {avg_vehicle_loss:.6f}")
         else:
-            # Use previous avg_val_loss when not validating
-            avg_val_loss = val_loss
+            history['patience_counter'] += 1
         
         # Log progress
         epoch_time = time.time() - epoch_start_time
         val_indicator = "[VAL]" if should_validate else "[cached]"
         logger.info(
                 f"Epoch {epoch+1}/{config['num_epochs']} ({epoch_time:.2f}s): "
-                f"Train Loss:{train_loss:.6f} ADE:{train_ade:.4f} FDE:{train_fde:.4f} | "
-                f"{val_indicator} Val Loss:{val_loss:.6f} ADE:{val_ade:.4f} FDE:{val_fde:.4f} | "
+                f"{val_indicator} "
+                f"Train Loss:{avg_vehicle_loss:.6f} ADE:{avg_vehicle_ade:.4f} FDE:{avg_vehicle_fde:.4f} | "
+                f"Val Loss:{avg_vehicle_loss:.6f} ADE:{avg_vehicle_ade:.4f} FDE:{avg_vehicle_fde:.4f} | "
                 f"Patience: {history['patience_counter']}"
             )
         
@@ -348,14 +283,11 @@ if __name__ == "__main__":
         if args.use_wandb:
             wandb_metrics = {
                 'epoch': epoch + 1,
-                'train/loss': train_loss,
-                'train/ade': train_ade,
-                'train/fde': train_fde,
-                'val/loss': val_loss,
-                'val/ade': val_ade,
-                'val/fde': val_fde,
-                'val/avg_loss': avg_val_loss,
-                'val/best_loss': history['best_val_loss'],
+                'train/loss': avg_vehicle_loss,
+                'val/loss': avg_vehicle_loss,
+                'val/ade': avg_vehicle_ade,
+                'val/fde': avg_vehicle_fde,
+                'val/best_vehicle_loss': history['best_val_loss'],
                 'train/lr': vehicle_optimizer.param_groups[0]['lr'],
                 'epoch_time': epoch_time,
                 'patience_counter': history['patience_counter']
