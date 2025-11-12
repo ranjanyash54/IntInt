@@ -84,12 +84,13 @@ class Scene:
         adjacency_dict = {}
         for node_id, node_data in node_dict.items():
             adjacency_dict[node_id] = []
-            cluster_id = node_data['cluster']
+            cluster_id = str(node_data['cluster'])
             lane_end_coords = lane_end_coords_dict.get(cluster_id, [])
             for lane_end_coord in lane_end_coords:
                 distance = ((node_data['x'] - lane_end_coord[0])**2 + (node_data['y'] - lane_end_coord[1])**2)**0.5
                 if distance <= self.signal_attention_radius:
-                    adjacency_dict[node_id].append(lane_end_coord)
+                    signal = self.signals[time][int(cluster_id)+1]
+                    adjacency_dict[node_id].append((lane_end_coords, signal))
                     break
         self.signal_adjacency_dict[time] = adjacency_dict
 

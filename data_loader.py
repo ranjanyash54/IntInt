@@ -139,10 +139,18 @@ class TrafficDataset(Dataset):
         """Get features for the polyline of the given object at the specified time."""
         polylines_features_normalized = []
         signal_features_normalized = []
+        max_polyline = self.config['max_polyline']
+        vectors_per_polyline = self.config['vectors_per_polyline']
+        polyline_encoder_input_size = self.config['polyline_encoder_input_size']
+
+        signal_encoder_input_size = self.config['signal_encoder_input_size']
+        signal_vector_size = self.config['signal_vector_size']
 
 
         polyline_list = scene.get_map_neighbors(time, object_id)
         signal_list = scene.get_signal_neighbors(time, object_id)
+
+        polyline_list = polyline_list[:max_polyline]
 
         for polyline, distance in polyline_list:
             polyline_features_normalized = []
@@ -154,12 +162,29 @@ class TrafficDataset(Dataset):
                 polyline_features_normalized.append([r/self.radius_normalizing_factor, sin_theta, cos_theta, d/self.speed_normalizing_factor, np.sin(head), np.cos(head)])
             polylines_features_normalized.append(polyline_features_normalized)
 
-        for signal in signal_list:
-            x, y = signal[:2]
-            r, sin_theta, cos_theta = scene.convert_rectangular_to_polar((x, y))
-            d = signal[2]
-            head = signal[-1]
-            signal_features_normalized.append([r/self.radius_normalizing_factor, sin_theta, cos_theta, d/self.speed_normalizing_factor, np.sin(head), np.cos(head)])
+        if len(signal_list) > 0:
+            coords = signal_list[0][0]
+            st, end = coords[0], coords[1]
+            r, sin_theta, cos_theta = scene.convert_rectangular_to_polar(st)
+            first = end[0] - st[0]
+            second = end[1] - st[1]
+            d, sin_delta, cos_delta = scene.convert_rectangular_to_polar((first, second))
+            signal_vector = [r/self.radius_normalizing_factor, sin_theta, cos_theta, d/self.speed_normalizing_factor, sin_delta, cos_delta]
+
+            signal = signal_list[0][1]
+            signal_array = [0.0] * self.config['signal_one_hot_size']
+            signal_array[int(signal)] = 1.0
+
+            signal_features_normalized.append(signal_vector + signal_array)
+        else: # Set it to green signal
+            signal = 3
+            signal_vector = [0.0] * signal_vector_size
+            signal_array = [0.0] * self.config['signal_one_hot_size']
+            signal_array[int(signal)] = 1.0
+            signal_features_normalized.append(signal_vector + signal_array)
+
+        while len(polylines_features_normalized) < max_polyline:
+            polylines_features_normalized.append([[0.0] * polyline_encoder_input_size for _ in range(vectors_per_polyline)])
 
         return polylines_features_normalized, signal_features_normalized
 
