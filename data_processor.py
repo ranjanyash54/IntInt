@@ -205,14 +205,14 @@ if __name__ == "__main__":
     output_dir.mkdir(exist_ok=True)
 
     # Dump train environment
-    if processor.train_environment and len(processor.train_environment) > 0:
-        train_output_path = output_dir / "train_environment.pkl"
+    if train_env and len(train_env) > 0:
+        train_output_path = output_dir / "train_environment_6hrs.pkl"
         dump(train_env, train_output_path)
         print(f"✓ Train environment saved to: {train_output_path}")
 
     # Dump validation environment
-    if processor.validation_environment and len(processor.validation_environment) > 0:
-        validation_output_path = output_dir / "validation_environment.pkl"
+    if validation_env and len(validation_env) > 0:
+        validation_output_path = output_dir / "val_environment_6hrs.pkl"
         dump(validation_env, validation_output_path)
         print(f"✓ Validation environment saved to: {validation_output_path}")
 
