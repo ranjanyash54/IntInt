@@ -11,9 +11,8 @@ from typing import Tuple
 class MSELoss(nn.Module):
     """Custom MSE loss that handles missing values."""
     
-    def __init__(self, reduction: str = 'mean'):
+    def __init__(self, config: dict):
         super().__init__()
-        self.reduction = reduction
     
     def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -39,25 +38,20 @@ class MSELoss(nn.Module):
         # Apply mask and compute mean
         masked_mse = mse * mask.unsqueeze(-1)  # [batch_size, prediction_horizon, 3]
         
-        if self.reduction == 'mean':
-            # Sum over all dimensions and divide by number of non-zero elements
-            total_elements = mask.sum()
-            if total_elements > 0:
-                return masked_mse.sum() / total_elements
-            else:
-                return torch.tensor(0.0, device=predictions.device)
-        elif self.reduction == 'sum':
-            return masked_mse.sum()
+        # Sum over all dimensions and divide by number of non-zero elements
+        total_elements = mask.sum()
+        if total_elements > 0:
+            return masked_mse.sum() / total_elements
         else:
-            return masked_mse
+            return torch.tensor(0.0, device=predictions.device)
 
 class CosineSimilarityLoss(nn.Module):
     """Cosine similarity loss for angle predictions."""
     
-    def __init__(self, reduction: str = 'mean', eps: float = 1e-8):
+    def __init__(self, config: dict, eps: float = 1e-8):
         super().__init__()
-        self.reduction = reduction
         self.eps = eps
+        self.config = config
     
     def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -99,18 +93,6 @@ class CosineSimilarityLoss(nn.Module):
 
         # --- optional: penalize deviation from unit norm (helps training) ---
         L_norm = (pred_norm.squeeze(-1) - 1.0).pow(2)
-
-        # --- masking & reduce ---
-        # Create mask for non-zero targets (non-padded values)
-        # mask = (targets != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
-        
-        # if mask is not None:
-        #     L_angle = L_angle * mask
-        #     L_speed = L_speed * mask
-        #     L_norm = L_norm * mask
-        #     denom = mask.sum().clamp_min(1.0)
-        # else:
-        #     denom = torch.tensor(L_angle.numel(), device=L_angle.device, dtype=L_angle.dtype)
         
         # Combine losses (equal weighting for speed and angle, small penalty for norm)
         loss = (L_speed.mean() + L_angle.mean() + 0.1 * L_norm.mean())
@@ -120,20 +102,17 @@ class CosineSimilarityLoss(nn.Module):
 class GaussianNLLLoss(nn.Module):
     """Gaussian Negative Log-Likelihood loss for delta x and delta y predictions."""
     
-    def __init__(self, reduction: str = 'mean', dt: float = 0.1):
+    def __init__(self, config: dict):
         super().__init__()
-        self.reduction = reduction
-        self.dt = dt
+        self.dt = config['dt']
     
-    def forward(self, predictions: torch.Tensor, targets: torch.Tensor, 
-                current_state: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
         Compute Gaussian NLL loss for delta x and delta y.
         
         Args:
             predictions: [batch_size, prediction_horizon, 4] - [mean_dx, mean_dy, log_std_dx, log_std_dy]
             targets: [batch_size, prediction_horizon, 6] - [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
-            current_state: [batch_size, 6] - Not used, kept for API compatibility
         
         Returns:
             Loss value
@@ -169,29 +148,22 @@ class GaussianNLLLoss(nn.Module):
         
         # Total NLL per timestep
         nll = nll_dx + nll_dy  # [batch_size, prediction_horizon]
-        
+
         # Apply mask
         masked_nll = nll * mask
-        
-        if self.reduction == 'mean':
-            total_elements = mask.sum()
-            if total_elements > 0:
-                return masked_nll.sum() / total_elements
-            else:
-                return torch.tensor(0.0, device=predictions.device)
-        elif self.reduction == 'sum':
-            return masked_nll.sum()
-        else:
-            return masked_nll
+
+        total_elements = mask.sum()
+        if total_elements > 0:
+            return masked_nll.sum() / total_elements
+        return torch.tensor(0.0, device=predictions.device)
 
 
 class VonMisesSpeedNLLLoss(nn.Module):
     """Von Mises distribution for angle + Log-Normal distribution for speed."""
     
-    def __init__(self, reduction: str = 'mean', dt: float = 0.1):
+    def __init__(self, config: dict):
         super().__init__()
-        self.reduction = reduction
-        self.dt = dt
+        self.dt = config['dt']
     
     def forward(self, predictions: torch.Tensor, targets: torch.Tensor, 
                 current_state: torch.Tensor = None) -> torch.Tensor:
@@ -254,33 +226,20 @@ class VonMisesSpeedNLLLoss(nn.Module):
         # Apply mask
         masked_nll = nll * mask
         
-        if self.reduction == 'mean':
-            total_elements = mask.sum()
-            if total_elements > 0:
-                return masked_nll.sum() / total_elements
-            else:
-                return torch.tensor(0.0, device=predictions.device)
-        elif self.reduction == 'sum':
-            return masked_nll.sum()
+        total_elements = mask.sum()
+        if total_elements > 0:
+            return masked_nll.sum() / total_elements
         else:
-            return masked_nll
+            return torch.tensor(0.0, device=predictions.device)
 
 
 class TrajectoryMetrics:
     """Class for calculating trajectory prediction metrics."""
     
-    def __init__(self, dt: float = 0.1, output_distribution_type: str = 'linear', evaluation_mode: bool = False, center_point: Tuple[float, float] = (0.0, 0.0)):
-        """
-        Initialize trajectory metrics calculator.
-        
-        Args:
-            dt: Time step duration in seconds
-            output_distribution_type: 'linear' (speed, cos, sin) or 'gaussian' (mean_dx, mean_dy, log_std_dx, log_std_dy)
-        """
-        self.dt = dt
-        self.output_distribution_type = output_distribution_type
-        self.evaluation_mode = evaluation_mode
-        self.center_point = center_point
+    def __init__(self, config: dict):
+        self.dt = config['dt']
+        self.output_distribution_type = config['output_distribution_type']
+        self.center_point = config['center_point']
     
     @staticmethod
     def vonmises_speed_to_cartesian(current_state: torch.Tensor, predictions: torch.Tensor, dt: float = 0.1) -> torch.Tensor:
@@ -431,8 +390,7 @@ class TrajectoryMetrics:
         
         return trajectory
     
-    @staticmethod
-    def target_to_cartesian(target_tensor: torch.Tensor, scene_center: Tuple[float, float]) -> torch.Tensor:
+    def target_to_cartesian(self, target_tensor: torch.Tensor) -> torch.Tensor:
         """
         Convert target tensor from polar to cartesian coordinates.
         
@@ -442,6 +400,7 @@ class TrajectoryMetrics:
         Returns:
             cartesian_positions: [batch_size, prediction_horizon, 2] - Positions in cartesian coordinates (x, y)
         """
+        scene_center = self.center_point
         # Extract r, sin_theta, cos_theta from target
         r = target_tensor[:, :, 0]  # [batch_size, prediction_horizon]
         sin_theta = target_tensor[:, :, 1]  # [batch_size, prediction_horizon]
@@ -456,30 +415,33 @@ class TrajectoryMetrics:
         
         return cartesian_positions
     
-    def calculate_ade_fde(self, current_state: torch.Tensor, predictions: torch.Tensor, 
-                          target_tensor: torch.Tensor, scene_center: Tuple[float, float]) -> Tuple[float, float]:
+    def calculate_ade_fde(self, history_tensor: torch.Tensor, target_tensor: torch.Tensor, predictions: torch.Tensor) -> Tuple[float, float]:
         """
         Calculate Average Displacement Error (ADE) and Final Displacement Error (FDE).
         
         Args:
-            current_state: [batch_size, 2] - Current state with [x, y]
-            predictions: [batch_size, prediction_horizon, 3 or 4] - Predictions with [speed, tangent_sin, tangent_cos] or [mean_dx, mean_dy, log_std_dx, log_std_dy]
+            history_tensor: [batch_size, prediction_horizon, 3] - History with [x, y, theta]
             target_tensor: [batch_size, prediction_horizon, 6] - Ground truth positions
+            predictions: [batch_size, prediction_horizon, 3 or 4] - Predictions with [speed, tangent_sin, tangent_cos] or [mean_dx, mean_dy, log_std_dx, log_std_dy]
         
         Returns:
             ade: Average Displacement Error
             fde: Final Displacement Error
         """
+
+        # Convert targets to cartesian
+        history_cartesian = self.target_to_cartesian(history_tensor)  # [batch_size, prediction_horizon, 2]
+        target_cartesian = self.target_to_cartesian(target_tensor)  # [batch_size, prediction_horizon, 2]
+
+        current_coords = history_cartesian[:, -1, :]
+
         # Convert predictions to cartesian based on output type
         if self.output_distribution_type == 'gaussian':
-            pred_cartesian = self.gaussian_to_cartesian(current_state, predictions)  # [batch_size, prediction_horizon, 2]
+            pred_cartesian = self.gaussian_to_cartesian(current_coords, predictions)  # [batch_size, prediction_horizon, 2]
         elif self.output_distribution_type == 'vonmises_speed':
-            pred_cartesian = self.vonmises_speed_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
+            pred_cartesian = self.vonmises_speed_to_cartesian(current_coords, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
         else:
-            pred_cartesian = self.polar_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
-        
-        # Convert targets to cartesian
-        target_cartesian = self.target_to_cartesian(target_tensor, scene_center)  # [batch_size, prediction_horizon, 2]
+            pred_cartesian = self.polar_to_cartesian(current_coords, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
         
         # Create mask for non-zero targets (non-padded values)
         mask = (target_tensor[:, :, :3] != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
@@ -508,18 +470,4 @@ class TrajectoryMetrics:
             fde = torch.tensor(0.0, device=predictions.device)
         
         return ade.item(), fde.item()
-    
-    def calculate_eval_cartesian(self, current_state: torch.Tensor, predictions: torch.Tensor) -> Tuple[float, float]:
-        # Convert predictions to cartesian based on output type
-        if self.output_distribution_type == 'gaussian':
-            pred_cartesian = self.gaussian_to_cartesian(current_state, predictions)  # [batch_size, prediction_horizon, 2]
-        elif self.output_distribution_type == 'vonmises_speed':
-            pred_cartesian = self.vonmises_speed_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
-        else:
-            pred_cartesian = self.polar_to_cartesian(current_state, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
-        
-        pred_cartesian = pred_cartesian + self.center_point
-
-        return pred_cartesian
-
 
