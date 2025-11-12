@@ -64,6 +64,7 @@ class TrafficDataset(Dataset):
                 features = [0.0] * self.actor_encoder_input_size  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
                 features_normalized = [0.0] * self.actor_encoder_input_size
             else:
+                self._get_polar_features(scene, entity_data)
                 features_normalized = [
                     entity_data['r']/self.radius_normalizing_factor, entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed']/self.speed_normalizing_factor,
                     entity_data['tangent_sin'], entity_data['tangent_cos']
@@ -99,8 +100,9 @@ class TrafficDataset(Dataset):
                 features = [0.0] * self.actor_encoder_input_size  # r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos
                 features_normalized = [0.0] * self.actor_encoder_input_size
             else:
+                self._get_polar_features(scene, entity_data)
                 features_normalized = [
-                    entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
+                    entity_data['r']/self.radius_normalizing_factor, entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed']/self.speed_normalizing_factor,
                     entity_data['tangent_sin'], entity_data['tangent_cos']
                 ]
                 features = [
@@ -135,6 +137,23 @@ class TrafficDataset(Dataset):
         
         return input_tensor, input_normalized_tensor, target_tensor, target_normalized_tensor, neighbor_tensor, target_neighbor_tensor, polyline_tensor, target_polyline_tensor, signal_tensor, target_signal_tensor
     
+    def _get_polar_features(self, scene, entity_data: dict):
+        """Get polar features for the given entity data."""
+
+        r, sin_theta, cos_theta = scene.convert_rectangular_to_polar((entity_data['x'], entity_data['y']))
+        speed = np.sqrt(entity_data['vx']**2 + entity_data['vy']**2)
+        head = entity_data['theta']
+        tangent_sin = np.sin(head)
+        tangent_cos = np.cos(head)
+
+        entity_data['r'] = r
+        entity_data['sin_theta'] = sin_theta
+        entity_data['cos_theta'] = cos_theta
+        entity_data['speed'] = speed
+        entity_data['tangent_sin'] = tangent_sin
+        entity_data['tangent_cos'] = tangent_cos
+
+
     def _get_polyline_features(self, scene, object_id: int, time: int):
         """Get features for the polyline of the given object at the specified time."""
         polylines_features_normalized = []
@@ -202,6 +221,7 @@ class TrafficDataset(Dataset):
         for neighbor_id, distance in neighbors:
             neighbor_data = scene.get_entity_data(time, neighbor_id)
             if neighbor_data is not None:
+                self._get_polar_features(scene, neighbor_data)
                 features_normalized = [
                     neighbor_data['r']/self.radius_normalizing_factor, neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed']/self.speed_normalizing_factor,
                     neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
