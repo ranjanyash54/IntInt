@@ -69,7 +69,7 @@ class MultiHeadAttention(nn.Module):
 class NeighborAttentionLayer(nn.Module):
     """Attention layer for processing neighbors of different types."""
     
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1, num_layers: int = 1):
+    def __init__(self, d_model: int, num_heads: int, num_layers: int, dropout: float = 0.1):
         super().__init__()
         self.d_model = d_model
         self.num_layers = num_layers
@@ -111,11 +111,10 @@ class NeighborAttentionLayer(nn.Module):
 class TemporalAttentionLayer(nn.Module):
     "Attention layer for processing temporal features."
 
-    def __init__(self, d_model: int, num_layers: int, prediction_horizon: int, max_seq_len: int = 1000, dropout: float = 0.1, num_heads: int = 8):
+    def __init__(self, d_model: int, num_heads: int, num_layers: int, prediction_horizon: int, max_seq_len: int = 1000, dropout: float = 0.1):
         super().__init__()
         self.d_model = d_model
-        self.prediction_horizon = prediction_horizon
-        self.num_layers = num_layers
+        self.dropout = dropout
 
         # Multiple attention layers
         self.attention_layers = nn.ModuleList([

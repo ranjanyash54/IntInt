@@ -106,7 +106,8 @@ class TrafficPredictionModel(nn.Module):
         if self.temporal_decoder_type == 'rnn':
             temporal_decoder = nn.LSTM(self.temporal_decoder_input_size, self.temporal_decoder_output_size, dropout=self.temporal_decoder_dropout)
         elif self.temporal_decoder_type == 'transformer':
-            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.temporal_decoder_num_layers, self.temporal_decoder_num_heads, self.prediction_horizon, dropout=self.temporal_decoder_dropout)
+            temporal_decoder = TemporalAttentionLayer(self.temporal_decoder_input_size, self.temporal_decoder_num_heads, self.temporal_decoder_num_layers,
+                                    self.prediction_horizon, max_seq_len=self.sequence_length+self.prediction_horizon+1, dropout=self.temporal_decoder_dropout)
 
         model_dict = nn.ModuleDict({
             # Input embedding
@@ -118,7 +119,7 @@ class TrafficPredictionModel(nn.Module):
             
             # Neighbor attention layers
             'neighbor_attention': NeighborAttentionLayer(
-                self.spatial_attention_input_size, self.spatial_attention_num_heads, self.spatial_attention_dropout, self.spatial_attention_num_layers
+                self.spatial_attention_input_size, self.spatial_attention_num_heads, self.spatial_attention_num_layers, self.spatial_attention_dropout
             ),
 
             # 'polyline_encoder': nn.LSTM(self.polyline_encoder_input_size, self.polyline_encoder_output_size, dropout=self.polyline_encoder_dropout),
@@ -190,7 +191,7 @@ class TrafficPredictionModel(nn.Module):
 
             target_neighbor_at_t = target_neighbor_embedded[:, i, :, :].unsqueeze(1)
             target_polyline_at_t = embedded_target_polyline[:, i, :, :].unsqueeze(1)
-            target_signal_at_t = embedded_target_signal[:, i, :].unsqueeze(1).unsqueeze(1)
+            target_signal_at_t = embedded_target_signal[:, i, :, :].unsqueeze(1)
             target_neighbors_at_t = torch.cat([target_neighbor_at_t, target_polyline_at_t, target_signal_at_t], dim=-2) # [batch_size, 1, num_polylines + num_neighbors + num_signals, features_per_neighbor]
             target_embedding = model['neighbor_attention'](temporal_embedding_at_t, target_neighbors_at_t)
 
@@ -267,10 +268,9 @@ class TrafficPredictionModel(nn.Module):
         embedded_polyline = polyline_embedded.view(batch_size, seq_len, self.num_polylines, -1)
 
         signal_embedded = model['signal_encoder'](signal_tensor) # [batch_size, seq_len, signal_encoder_output_size]
-        signal_embedded_expanded = signal_embedded.unsqueeze(2)  # [batch_size, seq_len, 1, signal_encoder_output_size]
         
         # Concatenate all spatial features across all timesteps at once
-        final_neighbors = torch.cat([neighbor_embedded, embedded_polyline, signal_embedded_expanded], dim=2)
+        final_neighbors = torch.cat([neighbor_embedded, embedded_polyline, signal_embedded], dim=2)
         # [batch_size, seq_len, num_neighbors + num_polylines + 1, features]
         
         # Apply attention to all timesteps at once
@@ -312,6 +312,7 @@ class TrafficPredictionModel(nn.Module):
                                                                 target_polyline_tensor.shape[4])
         target_polyline_embedded = model['polyline_encoder'](target_polyline_reshaped)
         embedded_target_polyline = target_polyline_embedded.view(batch_size, self.prediction_horizon, self.num_polylines, -1)
+        
         embedded_target_signal = model['signal_encoder'](target_signal_tensor)
 
         return target_neighbor_embedded, embedded_target_polyline, embedded_target_signal
@@ -406,7 +407,7 @@ class TrafficPredictor:
         return loss.item()
     
     def validate(self, input, entity_type: str,
-                 criterion: nn.Module) -> float:
+                 criterion: nn.Module) -> tuple[float, torch.Tensor]:
         """Perform validation."""
         self.model.eval()
 
@@ -432,7 +433,7 @@ class TrafficPredictor:
             # Calculate loss
             loss = criterion(predictions, target_tensor)
             
-            return loss.item()
+            return loss.item(), predictions.detach().cpu()
     
     def predict(self, input, entity_type: str) -> torch.Tensor:
         """Make predictions."""
