@@ -31,7 +31,7 @@ def create_parser():
     parser.add_argument(
         "--val_data",
         type=str,
-        default="output/validation_environment.pkl",
+        default="output/val_environment.pkl",
         help="Path to validation data directory",
     )
 
@@ -58,7 +58,7 @@ def create_parser():
         "--num_epochs", type=int, default=10, help="Number of epochs (overrides config)"
     )
     parser.add_argument(
-        "--validate_every", type=int, default=5, help="Run validation every N epochs"
+        "--validate_every", type=int, default=1, help="Run validation every N epochs"
     )
     parser.add_argument(
         "--train_metrics_every",
