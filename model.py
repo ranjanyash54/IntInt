@@ -63,14 +63,8 @@ class TrafficPredictionModel(nn.Module):
         self.temporal_decoder_dropout = config.get('temporal_decoder_dropout', 0.1)
 
         # Output type: 'linear' (speed, cos_theta, sin_theta) or 'gaussian' (mean_dx, mean_dy, log_std_dx, log_std_dy)
-        # or 'vonmises_speed' (mu_sin, mu_cos, log_kappa, log_mean_speed)
         self.output_distribution_type = config.get('output_distribution_type', 'linear')
-        if self.output_distribution_type == 'gaussian':
-            self.actor_decoder_output_size = 4  # mean_dx, mean_dy, log_std_dx, log_std_dy
-        elif self.output_distribution_type == 'vonmises_speed':
-            self.actor_decoder_output_size = 4  # mu_sin, mu_cos, log_kappa, log_mean_speed
-        else:
-            self.actor_decoder_output_size = config.get('actor_decoder_output_size', 3)
+        self.actor_decoder_output_size = config.get('actor_decoder_output_size', 3)
 
         # Create models based on available data
         self.models = nn.ModuleDict({
@@ -138,11 +132,7 @@ class TrafficPredictionModel(nn.Module):
             # Temporal decoder for prediction horizon
             'temporal_decoder': temporal_decoder,
 
-            'actor_decoder': nn.Sequential(
-                nn.Linear(self.temporal_decoder_output_size, self.actor_decoder_output_size),
-                nn.LeakyReLU(),
-                nn.Dropout(self.dropout)
-            ),
+            'actor_decoder': nn.Linear(self.temporal_decoder_output_size, self.actor_decoder_output_size)
 
         })
 
@@ -402,6 +392,7 @@ class TrafficPredictor:
         
         # Backward pass
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         optimizer.step()
         
         return loss.item()

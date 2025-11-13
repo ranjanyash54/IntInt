@@ -23,7 +23,7 @@ from data_loader import create_dataloaders
 from model import TrafficPredictor
 from environment import Environment
 from argument_parser import parse_training_args
-from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss, VonMisesSpeedNLLLoss, CosineSimilarityLoss
+from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss, CosineSimilarityLoss
 
 # Set up logging
 logging.basicConfig(
@@ -121,9 +121,6 @@ if __name__ == "__main__":
     if output_distribution_type == 'gaussian':
         criterion = GaussianNLLLoss(config)
         logger.info("Using GaussianNLLLoss for Gaussian output predictions")
-    elif output_distribution_type == 'vonmises_speed':
-        criterion = VonMisesSpeedNLLLoss(config)
-        logger.info("Using VonMisesSpeedNLLLoss for von Mises + speed predictions")
     elif output_distribution_type == 'cosine':
         criterion = CosineSimilarityLoss(config)
         logger.info("Using CosineSimilarityLoss for cosine similarity predictions")
@@ -283,7 +280,6 @@ if __name__ == "__main__":
         if args.use_wandb:
             wandb_metrics = {
                 'epoch': epoch + 1,
-                'train/loss': avg_vehicle_loss,
                 'val/loss': avg_vehicle_loss,
                 'val/ade': avg_vehicle_ade,
                 'val/fde': avg_vehicle_fde,
