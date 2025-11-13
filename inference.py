@@ -11,15 +11,15 @@ import json
 import numpy as np
 from pathlib import Path
 from collections import deque
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from model import TrafficPredictor
-from typing import Tuple
 import pandas as pd
 from inference_model import InferenceModel
 from environment import Environment
 from scene import Scene
 from argument_parser import parse_inference_args
 from metrics import TrajectoryMetrics
+import pickle
 
 # Set up logging
 logging.basicConfig(
@@ -81,8 +81,28 @@ class InferenceServer:
         # Setup ZeroMQ
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
-        self.socket.bind(f"tcp://*:{port}")
-        logger.info(f"Inference server listening on port {port}")
+        # Set LINGER to 0 so socket closes immediately on shutdown
+        self.socket.setsockopt(zmq.LINGER, 0)
+        try:
+            self.socket.bind(f"tcp://*:{port}")
+            logger.info(f"Inference server listening on port {port}")
+        except zmq.error.ZMQError as e:
+            self.socket.close()
+            self.context.term()
+            raise
+    
+    def __del__(self):
+        """Ensure cleanup on object destruction."""
+        if hasattr(self, 'socket'):
+            try:
+                self.socket.close()
+            except:
+                pass
+        if hasattr(self, 'context'):
+            try:
+                self.context.term()
+            except:
+                pass
     
     def cartesian_to_polar(self, delta_x: float, delta_y: float) -> Tuple[float, float, float]:
         """Convert Cartesian coordinates to polar coordinates."""
@@ -108,8 +128,26 @@ class InferenceServer:
 
         return entity_df[['vx', 'vy']].values
     
-    def process_data(self, data: pd.DataFrame):
+    def load_map_info(self):
+        """Load map information from the file."""
+        map_folder = 'data/map_info'
+        if not map_folder or not Path(map_folder).exists():
+            logger.warning("Map data folder not provided or does not exist")
+            return
+
+        cluster_polylines_info_path = Path(map_folder) / "cluster_polylines_dict.pickle"
+        with open(cluster_polylines_info_path, 'rb') as f:
+            cluster_polylines_dict = pickle.load(f)
+
+        lane_end_coords_info_path = Path(map_folder) / "lane_end_coords_dict.pickle"
+        with open(lane_end_coords_info_path, 'rb') as f:
+            lane_end_coords_dict = pickle.load(f)
+        
+        return cluster_polylines_dict, lane_end_coords_dict
+
+    def process_data(self, data: pd.DataFrame, signal_phases: List[int]):
         """Process the data."""
+        samples = []
         node_data_dict = {}
         data['time'] = data['time'].astype(int)
         data['id'] = data['id'].astype(int)
@@ -120,7 +158,7 @@ class InferenceServer:
         data['cluster'] = data['cluster'].astype(int)
         data['signal'] = data['signal'].astype(int)
 
-        data.drop(columns=['direction_id', 'maneuver_id', 'region'], inplace=True)
+        data.drop(columns=['direction_id', 'maneuver_id'], inplace=True)
 
         data['node_type'] = [self.class_map[int(c)] for c in data['vehicle_type']]
         data['node_id'] = data['id'].astype(str)
@@ -133,13 +171,17 @@ class InferenceServer:
         data.loc[:, 'signal'] = data['signal'].astype(int)
 
         scene = Scene(scene_id=0, config=self.config)
+        scene.signals = signal_phases
+
+        cluster_polylines_dict, lane_end_coords_dict = self.load_map_info()
+        scene.map_info = (cluster_polylines_dict, lane_end_coords_dict)
 
         for id in pd.unique(data['id']):
             node_df = data[data['id'] == id]
             node_type = node_df['vehicle_type'].iloc[0]
             assert np.all(np.diff(node_df['time']) == 1)
             vel_array = self._update_entity_kinematics(node_df.copy().reset_index(drop=True))
-            node_df[['vx', 'vy']] = vel_array
+            node_df.loc[:, ['vx', 'vy']] = vel_array
             data.loc[data['id'] == id, ['vx', 'vy']] = vel_array
 
             node_values = node_df[['x', 'y']].iloc[-1].values
@@ -149,17 +191,17 @@ class InferenceServer:
             signal = node_df['signal'].iloc[-1]
 
             r, sin_theta, cos_theta = scene.convert_rectangular_to_polar(node_values)
-            speed = np.sqrt(node_df['vx']**2 + node_df['vy']**2)
+            speed = np.sqrt(node_df['vx'].iloc[-1]**2 + node_df['vy'].iloc[-1]**2)
             tangent_sin = np.sin(theta)
             tangent_cos = np.cos(theta)
             scene.entity_data[(id, self.timestep)] = {
                 'x': node_values[0],
                 'y': node_values[1],
                 'theta': theta,
-                'r': r/self.radius_normalizing_factor,
+                'r': r,
                 'sin_theta': sin_theta,
                 'cos_theta': cos_theta,
-                'speed': speed/self.speed_normalizing_factor,
+                'speed': speed,
                 'tangent_sin': tangent_sin,
                 'tangent_cos': tangent_cos,
                 'signal_one_hot': signal_values,
@@ -168,26 +210,42 @@ class InferenceServer:
                 'node_type': node_type,
                 'theta': theta
             }
+            samples.append((id, self.timestep))
+
+        data = data[data.time == self.timestep]
         
         node_dict = data.set_index('id')[['x', 'y', 'cluster']].to_dict("index")
         scene._create_neighbor_adjacency_dict(self.timestep, node_dict)
         scene._create_map_adjacency_dict(self.timestep, node_dict)
         scene._create_signal_adjacency_dict(self.timestep, node_dict)
 
-        return scene
+        return scene, samples
     
     def calculate_next_position_linear(self, data, prediction):
-            current_position = (data['x'], data['y'])
-            speed = prediction[0]
-            tangent_sin = prediction[1]
-            tangent_cos = prediction[2]
-            delta_x = speed * tangent_cos
-            delta_y = speed * tangent_sin
-            next_x = current_position[0] + delta_x
-            next_y = current_position[1] + delta_y
-            angle = np.arctan2(delta_y.detach().numpy(), delta_x.detach().numpy())
-            return next_x, next_y, angle
+        current_position = (data['x'], data['y'])
+        speed = prediction[0]
+        tangent_sin = prediction[1]
+        tangent_cos = prediction[2]
+        delta_x = speed * tangent_cos
+        delta_y = speed * tangent_sin
+        next_x = current_position[0] + delta_x
+        next_y = current_position[1] + delta_y
+        angle = np.arctan2(delta_y.detach().numpy(), delta_x.detach().numpy())
+        return next_x, next_y, angle
     
+    def calculate_next_position_gaussian(self, data, prediction):
+        current_position = (data['x'], data['y'])
+        mean_dx = prediction[0]
+        mean_dy = prediction[1]
+        log_std_dx = prediction[2]
+        log_std_dy = prediction[3]
+        std_dx = np.exp(log_std_dx)
+        std_dy = np.exp(log_std_dy)
+        next_x = current_position[0] + mean_dx
+        next_y = current_position[1] + mean_dy
+        angle = np.arctan2(next_y - current_position[1], next_x - current_position[0])
+        return next_x, next_y, angle
+
     def process_prediction(self, current_position: torch.Tensor, prediction: torch.Tensor) -> Tuple[float, float]:
         pred_cartesian = self.trajectory_metrics.calculate_eval_cartesian(current_position, prediction)
         result = pred_cartesian.squeeze(0).squeeze(0).tolist()
@@ -203,22 +261,25 @@ class InferenceServer:
             return ' '
         
         data = pd.DataFrame(data)
-        data.columns = ['time', 'id', 'x', 'y', 'theta', 'vehicle_type', 'cluster', 'signal', 'direction_id', 'maneuver_id', 'region']
+        data.columns = ['time', 'id', 'x', 'y', 'theta', 'vehicle_type', 'cluster', 'signal', 'direction_id', 'maneuver_id']
 
 
-        scene = self.process_data(data)
-        predictions = self.inference_model.predict(scene)
+        scene, samples = self.process_data(data, signal_phases)
+        predictions = self.inference_model.predict(scene, samples, self.timestep)
         timestep_str = str(self.timestep)
         output_json = {timestep_str:{}}
 
         for node_id, prediction in predictions.items():
             prediction = prediction.squeeze(0).squeeze(0)
-            data = node_data_dict[node_id]
+            prediction = prediction.detach().numpy()
+            data = scene.get_entity_data(self.timestep, node_id)
             if self.output_distribution_type == 'linear':
                 next_x, next_y, angle = self.calculate_next_position_linear(data, prediction)
+            elif self.output_distribution_type == 'gaussian':
+                next_x, next_y, angle = self.calculate_next_position_gaussian(data, prediction)
             
             
-            output_json[timestep_str][node_id] = {'coord': [next_x.detach().numpy().tolist(), next_y.detach().numpy().tolist()], 'angle': [angle.tolist()]}
+            output_json[timestep_str][int(node_id)] = {'coord': [next_x.tolist(), next_y.tolist()], 'angle': [angle.tolist()]}
         
         logger.info(f"Output JSON: {output_json}")
         
@@ -245,6 +306,7 @@ class InferenceServer:
         finally:
             self.socket.close()
             self.context.term()
+            logger.info("Server shutdown complete")
 
 
 if __name__ == "__main__":
