@@ -20,6 +20,7 @@ from scene import Scene
 from argument_parser import parse_inference_args
 from metrics import TrajectoryMetrics
 import pickle
+from model_utils import check_boundary
 
 # Set up logging
 logging.basicConfig(
@@ -278,6 +279,8 @@ class InferenceServer:
             elif self.output_distribution_type == 'gaussian':
                 next_x, next_y, angle = self.calculate_next_position_gaussian(data, prediction)
             
+            if not check_boundary((next_x, next_y)):
+                continue
             
             output_json[timestep_str][int(node_id)] = {'coord': [next_x.tolist(), next_y.tolist()], 'angle': [angle.tolist()]}
         

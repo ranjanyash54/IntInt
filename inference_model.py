@@ -69,11 +69,14 @@ class InferenceModel:
             if self.node_history_length[id] >= self.sequence_length:
                 self.predictions[id] = prediction
         
+        id_to_delete = []
         for id in self.node_embedding:
             if (id, timestep) not in samples:
-                del self.node_embedding[id]
-                del self.node_history_length[id]
-                del self.predictions[id]
+                id_to_delete.append(id)
+        for id in id_to_delete:
+            del self.node_embedding[id]
+            del self.node_history_length[id]
+            del self.predictions[id]
 
         return self.predictions
 

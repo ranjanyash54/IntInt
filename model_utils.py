@@ -2,6 +2,17 @@ import torch
 import numpy as np
 import math
 from scene import Scene
+import matplotlib.path as mplPath
+
+
+inter_str = '125.61,333.2;212.34,333.2;212.34,252.37;125.61,252.37'
+temp = [s.split(',') for s in inter_str.split(';')]
+inter_points = [[float(s) for s in pt] for pt in temp]
+inter_points.append(inter_points[0])
+include_polygon = mplPath.Path(inter_points, closed=True)
+
+def check_boundary(pos):
+    return include_polygon.contains_point(pos)
 
 
 def check_visible_nbr(visible_angle_threshold, neighbor_pos, node_pos, theta):
