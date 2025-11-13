@@ -4,6 +4,7 @@ Metrics for trajectory prediction evaluation.
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 from typing import Tuple
 
@@ -98,139 +99,102 @@ class CosineSimilarityLoss(nn.Module):
         loss = (L_speed.mean() + L_angle.mean() + 0.1 * L_norm.mean())
         return loss
 
-
 class GaussianNLLLoss(nn.Module):
-    """Gaussian Negative Log-Likelihood loss for delta x and delta y predictions."""
-    
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, eps: float = 1e-6):
         super().__init__()
-        self.dt = config['dt']
+        self.dt = config["dt"]
+        self.eps = eps
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # preds: [B, T, 4] -> [mu_x, mu_y, log_sigma_x, log_sigma_y]
+        # targets: [B, T, 6] -> as in your code
+
+        # (if there *is* an extra dim, handle it explicitly)
+        if preds.dim() == 4 and preds.size(-2) == 1:
+            preds = preds.squeeze(-2)
+
+        mu = preds[..., 0:2]             # [B,T,2]
+        log_sigma = preds[..., 2:4]      # [B,T,2]
+
+        # clamp std range to something reasonable (≈ [0.01, 20])
+        log_sigma = torch.clamp(log_sigma, min=-5.0, max=3.0)
+        sigma = torch.exp(log_sigma)
+
+        # build true deltas
+        speed = targets[..., 3]
+        tan_sin = targets[..., 4]
+        tan_cos = targets[..., 5]
+
+        dx = speed * tan_cos * self.dt
+        dy = speed * tan_sin * self.dt
+        delta = torch.stack([dx, dy], dim=-1)  # [B,T,2]
+
+        # NLL for diagonal Gaussian
+        diff = (delta - mu) / (sigma + self.eps)
+        quad = (diff ** 2).sum(dim=-1)                     # [B,T]
+        logdet = 2 * log_sigma.sum(dim=-1)                 # [B,T]
+
+        nll = 0.5 * (quad + logdet + 2 * math.log(2 * math.pi))
+        return nll.mean()
+
+# class GaussianNLLLoss(nn.Module):
+#     """Gaussian Negative Log-Likelihood loss for delta x and delta y predictions."""
     
-    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Compute Gaussian NLL loss for delta x and delta y.
-        
-        Args:
-            predictions: [batch_size, prediction_horizon, 4] - [mean_dx, mean_dy, log_std_dx, log_std_dy]
-            targets: [batch_size, prediction_horizon, 6] - [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
-        
-        Returns:
-            Loss value
-        """
-        predictions = predictions.squeeze(-2)
-        
-        # Extract Gaussian parameters
-        mean_dx = predictions[:, :, 0]  # [batch_size, prediction_horizon]
-        mean_dy = predictions[:, :, 1]  # [batch_size, prediction_horizon]
-        log_std_dx = predictions[:, :, 2].clamp(min=-10.0, max=2.0)  # [batch_size, prediction_horizon]
-        log_std_dy = predictions[:, :, 3].clamp(min=-10.0, max=2.0)  # [batch_size, prediction_horizon]
-        
-        # Convert log_std to variance for numerical stability
-        var_dx = torch.exp(2 * log_std_dx)  # variance = exp(2*log_std)
-        var_dy = torch.exp(2 * log_std_dy)
-        
-        # Compute actual deltas from targets: delta = speed * tangent
-        # targets: [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
-        speed = targets[:, :, 3]  # [batch_size, prediction_horizon]
-        tangent_sin = targets[:, :, 4]  # [batch_size, prediction_horizon]
-        tangent_cos = targets[:, :, 5]  # [batch_size, prediction_horizon]
-        
-        actual_dx = speed * tangent_cos * self.dt  # [batch_size, prediction_horizon]
-        actual_dy = speed * tangent_sin * self.dt  # [batch_size, prediction_horizon]
-        
-        # Create mask for non-zero targets (non-padded values)
-        mask = (targets[:, :, :3] != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
-        
-        # Compute negative log-likelihood (numerically stable version)
-        # NLL = 0.5 * (log(2*pi) + log(var) + (x - mean)^2 / var)
-        nll_dx = 0.5 * (math.log(2 * math.pi) + 2 * log_std_dx + (actual_dx - mean_dx)**2 / (var_dx + 1e-6))
-        nll_dy = 0.5 * (math.log(2 * math.pi) + 2 * log_std_dy + (actual_dy - mean_dy)**2 / (var_dy + 1e-6))
-        
-        # Total NLL per timestep
-        nll = nll_dx + nll_dy  # [batch_size, prediction_horizon]
-
-        # Apply mask
-        masked_nll = nll * mask
-
-        total_elements = mask.sum()
-        if total_elements > 0:
-            return masked_nll.sum() / total_elements
-        return torch.tensor(0.0, device=predictions.device)
-
-
-class VonMisesSpeedNLLLoss(nn.Module):
-    """Von Mises distribution for angle + Log-Normal distribution for speed."""
+#     def __init__(self, config: dict, eps: float = 1e-6):
+#         super().__init__()
+#         self.dt = config['dt']
+#         self.eps = eps
     
-    def __init__(self, config: dict):
-        super().__init__()
-        self.dt = config['dt']
-    
-    def forward(self, predictions: torch.Tensor, targets: torch.Tensor, 
-                current_state: torch.Tensor = None) -> torch.Tensor:
-        """
-        Compute von Mises + speed NLL loss.
+#     def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+#         """
+#         Compute Gaussian NLL loss for delta x and delta y.
         
-        Args:
-            predictions: [batch_size, prediction_horizon, 4] - [mu_sin, mu_cos, log_kappa, log_mean_speed]
-            targets: [batch_size, prediction_horizon, 6] - [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
-            current_state: [batch_size, 6] - Not used, kept for API compatibility
+#         Args:
+#             predictions: [batch_size, prediction_horizon, 5] - [mu_x, mu_y, a, b, c]
+#             targets: [batch_size, prediction_horizon, 6] - [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
         
-        Returns:
-            Loss value
-        """
-        predictions = predictions.squeeze(-2)
+#         Returns:
+#             Loss value
+#         """
+#         predictions = predictions.squeeze(-2)
+#         batch_size, prediction_horizon, _ = predictions.shape
+#         # Extract Gaussian parameters
+
+#         mean = predictions[:, :, :2]
+#         a, b, c = predictions[:, :, 2], predictions[:, :, 3], predictions[:, :, 4]
+#         l11 = F.softplus(a) + self.eps              # positive
+#         l21 = b                                # free
+#         l22 = F.softplus(c) + self.eps              # positive
+
+#         # build lower-triangular L: shape (B,2,2)
+#         L = torch.zeros(batch_size, prediction_horizon, 2, 2, device=predictions.device, dtype=predictions.dtype)
+#         L[..., 0, 0] = l11
+#         L[..., 1, 0] = l21
+#         L[..., 1, 1] = l22
+
+#         # Compute actual deltas from targets: delta = speed * tangent
+#         # targets: [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
+#         speed = targets[:, :, 3]  # [batch_size, prediction_horizon]
+#         tangent_sin = targets[:, :, 4]  # [batch_size, prediction_horizon]
+#         tangent_cos = targets[:, :, 5]  # [batch_size, prediction_horizon]
         
-        # Extract von Mises parameters for angle
-        mu_sin = predictions[:, :, 0]  # [batch_size, prediction_horizon]
-        mu_cos = predictions[:, :, 1]  # [batch_size, prediction_horizon]
-        log_kappa = predictions[:, :, 2].clamp(min=-5.0, max=5.0)  # [batch_size, prediction_horizon]
-        log_mean_speed = predictions[:, :, 3].clamp(min=-10.0, max=5.0)  # [batch_size, prediction_horizon]
-        
-        # Normalize mu to unit vector
-        mu_norm = torch.sqrt(mu_sin**2 + mu_cos**2 + 1e-8)
-        mu_sin_normalized = mu_sin / mu_norm
-        mu_cos_normalized = mu_cos / mu_norm
-        
-        kappa = torch.exp(log_kappa)
-        mean_speed = torch.exp(log_mean_speed)
-        
-        # Extract actual values from targets
-        target_sin = targets[:, :, 4]  # tangent_sin
-        target_cos = targets[:, :, 5]  # tangent_cos
-        target_speed = targets[:, :, 3]
-        
-        # Von Mises NLL for angle
-        # NLL = -log(exp(kappa * cos(theta - mu)) / (2*pi*I_0(kappa)))
-        # where cos(theta - mu) = cos(theta)*cos(mu) + sin(theta)*sin(mu)
-        cos_diff = target_cos * mu_cos_normalized + target_sin * mu_sin_normalized
-        # Approximate log(I_0(kappa)) for numerical stability
-        # For small kappa: I_0(kappa) ≈ 1
-        # For large kappa: log(I_0(kappa)) ≈ kappa - 0.5*log(2*pi*kappa)
-        log_i0_kappa = torch.where(
-            kappa < 3.75,
-            torch.log(1 + (kappa**2) / 4 + (kappa**4) / 64),  # Small kappa approximation
-            kappa - 0.5 * torch.log(2 * math.pi * kappa)  # Large kappa approximation
-        )
-        von_mises_nll = -kappa * cos_diff + log_i0_kappa + math.log(2 * math.pi)
-        
-        # Speed NLL (using simple L2 loss for mean speed)
-        # Could use log-normal, but keeping it simple
-        speed_nll = 0.5 * ((target_speed - mean_speed) / (mean_speed + 0.1))**2
-        
-        # Total NLL
-        nll = von_mises_nll + speed_nll  # [batch_size, prediction_horizon]
-        
-        # Create mask for non-zero targets (non-padded values)
-        mask = (targets[:, :, :3] != 0).any(dim=-1).float()  # [batch_size, prediction_horizon]
-        
-        # Apply mask
-        masked_nll = nll * mask
-        
-        total_elements = mask.sum()
-        if total_elements > 0:
-            return masked_nll.sum() / total_elements
-        else:
-            return torch.tensor(0.0, device=predictions.device)
+#         actual_dx = speed * tangent_cos * self.dt  # [batch_size, prediction_horizon]
+#         actual_dy = speed * tangent_sin * self.dt  # [batch_size, prediction_horizon]
+
+#         actual_delta = torch.stack([actual_dx, actual_dy], dim=-1)  # [batch_size, prediction_horizon, 2]
+
+#         diff = (actual_delta - mean)[..., None]  # [batch_size, prediction_horizon, 2, 1]
+#         z = torch.linalg.solve_triangular(L, diff, upper=False)  # (B,T,2,1)
+#         # Quadratic term: ||z||^2
+#         quad = torch.sum(z.squeeze(-1)**2, dim=-1)               # (B,T)
+
+#         # log|Σ| = 2 * (log l11 + log l22)
+#         diag = torch.diagonal(L, dim1=-2, dim2=-1)               # (B,T,2)
+#         logdet = 2 * torch.sum(torch.log(diag + self.eps), dim=-1)    # (B,T)
+
+#         nll = 0.5 * (quad + logdet + 2 * math.log(2 * math.pi))  # (B,T)
+
+#         return nll.mean()
 
 
 class TrajectoryMetrics:
@@ -240,62 +204,6 @@ class TrajectoryMetrics:
         self.dt = config['dt']
         self.output_distribution_type = config['output_distribution_type']
         self.center_point = config['center_point']
-    
-    @staticmethod
-    def vonmises_speed_to_cartesian(current_state: torch.Tensor, predictions: torch.Tensor, dt: float = 0.1) -> torch.Tensor:
-        """
-        Convert von Mises + speed predictions to cartesian coordinates.
-        
-        Args:
-            current_state: [batch_size, 2] - Current state with [x, y]
-            predictions: [batch_size, prediction_horizon, 4] - Predictions with [mu_sin, mu_cos, log_kappa, log_mean_speed]
-            dt: Time step duration in seconds
-        
-        Returns:
-            cartesian_trajectory: [batch_size, prediction_horizon, 2] - Trajectory in cartesian coordinates (x, y)
-        """
-        batch_size = current_state.shape[0]
-        predictions = predictions.squeeze(-2)
-        prediction_horizon = predictions.shape[1]
-        
-        # Extract current position from polar coordinates
-        current_x = current_state[:, 0]  # [batch_size]
-        current_y = current_state[:, 1]  # [batch_size]
-        
-        # Initialize trajectory
-        trajectory = torch.zeros(batch_size, prediction_horizon, 2, device=predictions.device)
-        
-        # Current position for tracking
-        x = current_x
-        y = current_y
-        
-        # For each prediction timestep
-        for t in range(prediction_horizon):
-            # Extract mean direction and speed
-            mu_sin = predictions[:, t, 0]
-            mu_cos = predictions[:, t, 1]
-            log_mean_speed = predictions[:, t, 3]
-            
-            # Normalize direction
-            mu_norm = torch.sqrt(mu_sin**2 + mu_cos**2 + 1e-8)
-            mu_sin_normalized = mu_sin / mu_norm
-            mu_cos_normalized = mu_cos / mu_norm
-            
-            mean_speed = torch.exp(log_mean_speed.clamp(min=-10.0, max=5.0))
-            
-            # Compute velocity
-            velocity_x = mean_speed * mu_cos_normalized
-            velocity_y = mean_speed * mu_sin_normalized
-            
-            # Update position
-            x = x + velocity_x * dt
-            y = y + velocity_y * dt
-            
-            # Store position
-            trajectory[:, t, 0] = x
-            trajectory[:, t, 1] = y
-        
-        return trajectory
     
     @staticmethod
     def gaussian_to_cartesian(current_state: torch.Tensor, predictions: torch.Tensor) -> torch.Tensor:
@@ -438,8 +346,6 @@ class TrajectoryMetrics:
         # Convert predictions to cartesian based on output type
         if self.output_distribution_type == 'gaussian':
             pred_cartesian = self.gaussian_to_cartesian(current_coords, predictions)  # [batch_size, prediction_horizon, 2]
-        elif self.output_distribution_type == 'vonmises_speed':
-            pred_cartesian = self.vonmises_speed_to_cartesian(current_coords, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
         else:
             pred_cartesian = self.polar_to_cartesian(current_coords, predictions, self.dt)  # [batch_size, prediction_horizon, 2]
         
