@@ -65,13 +65,14 @@ if __name__ == "__main__":
     train_data_folder = args.train_data
     val_data_folder = args.val_data
     
-    # Create timestamped output directory
+    # Create timestamped output directory (only if save_model is enabled)
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    base_output_dir = Path(config.get('save_dir', 'models'))
-    output_dir = base_output_dir / f"training_{timestamp}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    logger.info(f"Output directory: {output_dir}")
+    output_dir = None
+    if args.save_model:
+        base_output_dir = Path(config.get('save_dir', 'models'))
+        output_dir = base_output_dir / f"training_{timestamp}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Output directory: {output_dir}")
     
     # Initialize Weights & Biases
     if args.use_wandb:
@@ -84,10 +85,11 @@ if __name__ == "__main__":
         logger.info(f"Weights & Biases initialized - Project: {args.wandb_project}, Run: {wandb_run_name}")
     
     # Save config to timestamped directory
-    config_path = output_dir / "config.json"
-    with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
-    logger.info(f"Config saved to {config_path}")
+    if args.save_model:
+        config_path = output_dir / "config.json"
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        logger.info(f"Config saved to {config_path}")
     
     # Load environments from joblib files
     logger.info(f"Loading training environment from joblib file: {train_data_folder}")
@@ -259,9 +261,10 @@ if __name__ == "__main__":
             history['patience_counter'] = 0
             
             # Save best model
-            best_model_path = output_dir / "best_model.pth"
-            predictor.save_model(str(best_model_path))
-            logger.info(f"New best model saved with validation loss: {avg_vehicle_loss:.6f}")
+            if args.save_model:
+                best_model_path = output_dir / "best_model.pth"
+                predictor.save_model(str(best_model_path))
+                logger.info(f"New best model saved with validation loss: {avg_vehicle_loss:.6f}")
         else:
             history['patience_counter'] += 1
         
@@ -292,7 +295,7 @@ if __name__ == "__main__":
             wandb.log(wandb_metrics)
         
         # Save checkpoint periodically
-        if (epoch + 1) % config['save_interval'] == 0:
+        if args.save_model and (epoch + 1) % config['save_interval'] == 0:
             checkpoint_path = output_dir / f"checkpoint_epoch_{epoch+1}.pth"
             predictor.save_model(str(checkpoint_path))
         
@@ -302,13 +305,14 @@ if __name__ == "__main__":
             break
     
     # Save final model
-    final_model_path = output_dir / "final_model.pth"
-    predictor.save_model(str(final_model_path))
-    
-    # Save training history
-    history_path = output_dir / "training_history.json"
-    with open(history_path, 'w') as f:
-        json.dump(history, f, indent=2)
+    if args.save_model:
+        final_model_path = output_dir / "final_model.pth"
+        predictor.save_model(str(final_model_path))
+        
+        # Save training history
+        history_path = output_dir / "training_history.json"
+        with open(history_path, 'w') as f:
+            json.dump(history, f, indent=2)
     
     total_time = time.time() - start_time
     logger.info(f"Training completed in {total_time:.2f} seconds")

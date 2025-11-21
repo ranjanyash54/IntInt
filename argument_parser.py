@@ -96,6 +96,11 @@ def create_parser():
         default=None,
         help="W&B run name (defaults to timestamp)",
     )
+    parser.add_argument(
+        "--save_model",
+        action="store_true",
+        help="Save model checkpoints and training artifacts",
+    )
 
     return parser
 
@@ -208,15 +213,12 @@ def print_usage_examples():
     print("Override data loading workers:")
     print("  python train.py --num_workers 8")
     print()
-    print("Custom configuration file:")
-    print("  python train.py --config custom_config.json")
-    print()
-    print("Override multiple parameters:")
-    print("  python train.py --batch_size 128 --learning_rate 0.0001 --num_epochs 50")
+    print("Test the training script:")
+    print("  python train.py --batch_size 2 --num_workers 0 --device cuda")
     print()
     print("Full custom setup:")
     print(
-        "  python train.py --config config.json --num_workers 8 --device cuda --num_epochs 50"
+        "  python train.py --config config.json --num_workers 8 --device cuda --num_epochs 100 --save_model --use_wandb"
     )
     print()
     print("Show all available arguments:")
