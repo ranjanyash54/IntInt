@@ -185,9 +185,12 @@ class TrafficDataset(Dataset):
             coords = signal_list[0][0]
             st, end = coords[0], coords[1]
             r, sin_theta, cos_theta = scene.convert_rectangular_to_polar(st)
-            first = end[0] - st[0]
-            second = end[1] - st[1]
-            d, sin_delta, cos_delta = scene.convert_rectangular_to_polar((first, second))
+
+            delta_x = end[0] - st[0]
+            delta_y = end[1] - st[1]
+            d = np.sqrt(delta_x**2 + delta_y**2)
+            sin_delta = delta_y/d
+            cos_delta = delta_x/d
             signal_vector = [r/self.radius_normalizing_factor, sin_theta, cos_theta, d/self.speed_normalizing_factor, sin_delta, cos_delta]
 
             signal = signal_list[0][1]
