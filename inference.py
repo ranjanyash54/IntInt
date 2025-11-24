@@ -172,7 +172,8 @@ class InferenceServer:
         data.loc[:, 'signal'] = data['signal'].astype(int)
 
         scene = Scene(scene_id=0, config=self.config)
-        scene.signals = signal_phases
+        scene.signals = list()
+        scene.signals.append(signal_phases)
 
         cluster_polylines_dict, lane_end_coords_dict = self.load_map_info()
         scene.map_info = (cluster_polylines_dict, lane_end_coords_dict)
@@ -213,12 +214,13 @@ class InferenceServer:
             }
             samples.append((id, self.timestep))
 
-        data = data[data.time == self.timestep]
+        last_timestep = data['time'].max()
+        data = data[data.time == last_timestep]
         
         node_dict = data.set_index('id')[['x', 'y', 'cluster']].to_dict("index")
         scene._create_neighbor_adjacency_dict(self.timestep, node_dict)
         scene._create_map_adjacency_dict(self.timestep, node_dict)
-        scene._create_signal_adjacency_dict(self.timestep, node_dict)
+        scene._create_signal_adjacency_dict(time=0, node_dict=node_dict)
 
         return scene, samples
     

@@ -129,9 +129,11 @@ class InferenceModel:
         signal_encoder_input_size = self.config['signal_encoder_input_size']
         signal_vector_size = self.config['signal_vector_size']
 
+        radius_normalizing_factor = self.config['radius_normalizing_factor']
+        speed_normalizing_factor = self.config['speed_normalizing_factor']
 
         polyline_list = scene.get_map_neighbors(time, object_id)
-        signal_list = scene.get_signal_neighbors(time, object_id)
+        signal_list = scene.get_signal_neighbors(timestep=0, entity_id=object_id)
 
         polyline_list = polyline_list[:max_polyline]
 
@@ -142,7 +144,7 @@ class InferenceModel:
                 r, sin_theta, cos_theta = scene.convert_rectangular_to_polar((x, y))
                 d = vector[2]
                 head = vector[-1]
-                polyline_features_normalized.append([r/self.radius_normalizing_factor, sin_theta, cos_theta, d/self.speed_normalizing_factor, np.sin(head), np.cos(head)])
+                polyline_features_normalized.append([r/radius_normalizing_factor, sin_theta, cos_theta, d/speed_normalizing_factor, np.sin(head), np.cos(head)])
             polylines_features_normalized.append(polyline_features_normalized)
 
         if len(signal_list) > 0:
@@ -154,7 +156,7 @@ class InferenceModel:
             d = np.sqrt(delta_x**2 + delta_y**2)
             sin_delta = delta_y/d
             cos_delta = delta_x/d
-            signal_vector = [r/self.radius_normalizing_factor, sin_theta, cos_theta, d/self.speed_normalizing_factor, sin_delta, cos_delta]
+            signal_vector = [r/radius_normalizing_factor, sin_theta, cos_theta, d/speed_normalizing_factor, sin_delta, cos_delta]
 
             signal = signal_list[0][1]
             signal_array = [0.0] * self.config['signal_one_hot_size']
