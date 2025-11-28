@@ -21,6 +21,7 @@ from argument_parser import parse_inference_args
 from metrics import TrajectoryMetrics
 import pickle
 from model_utils import check_boundary
+from ccs_utils import process_ccs, convert_to_img_coord, cluster2attr, convert_to_CCS_coord
 
 # Set up logging
 logging.basicConfig(
@@ -283,6 +284,14 @@ class InferenceServer:
             
             if not check_boundary((next_x, next_y)):
                 continue
+
+            node_next_ccs, _ = convert_to_CCS_coord([(next_x, next_y)], centroid_spl[data['cluster']])
+            node_next_ccs[0][1] = 0
+            node_next_ccs = node_next_ccs[0]
+            x_spl, y_spl = centroid_spl[data['cluster']]
+            xds, yds = x_spl.derivative(), y_spl.derivative()
+            dx, dy = xds(node_next_ccs[0]), yds(node_next_ccs[0])
+            angle = np.arctan2(dy, dx)
             
             output_json[timestep_str][int(node_id)] = {'coord': [next_x.tolist(), next_y.tolist()], 'angle': [angle.tolist()]}
         
@@ -317,6 +326,9 @@ class InferenceServer:
 if __name__ == "__main__":
     # Parse command line arguments
     args = parse_inference_args()
+
+    centroid_dict = pickle.load(open('./centroids/centroid_dict_one.p', 'rb'))
+    centroid_spl = centroid_dict['centroid_spl_dict']
     
     # Load the model
     predictor, config = load_model(args.model_path)
