@@ -38,9 +38,9 @@ class InferenceModel:
             node_data = scene.get_entity_data(timestep, id)
             if node_data is None:
                 continue
-            actor_data = [node_data['r'], node_data['sin_theta'], node_data['cos_theta'], node_data['speed'], node_data['tangent_sin'], node_data['tangent_cos']]
+            actor_data = [node_data['r'], node_data['sin_theta'], node_data['cos_theta'], node_data['speed'], node_data['tangent_sin'], node_data['tangent_cos'], self.config['veh_length'], self.config['veh_width']]
             actor_data = torch.tensor(actor_data, dtype=torch.float32).unsqueeze(0).unsqueeze(0) # [1, 1, 6]
-            actor_data_normalized = [node_data['r']/self.config['radius_normalizing_factor'], node_data['sin_theta'], node_data['cos_theta'], node_data['speed']/self.config['speed_normalizing_factor'], node_data['tangent_sin'], node_data['tangent_cos']]
+            actor_data_normalized = [node_data['r']/self.config['radius_normalizing_factor'], node_data['sin_theta'], node_data['cos_theta'], node_data['speed']/self.config['speed_normalizing_factor'], node_data['tangent_sin'], node_data['tangent_cos'], self.config['veh_length']/self.config['radius_normalizing_factor'], self.config['veh_width']/self.config['radius_normalizing_factor']]
             actor_data_normalized = torch.tensor(actor_data_normalized, dtype=torch.float32).unsqueeze(0).unsqueeze(0) # [1, 1, 6]
 
             neighbors_features_normalized = self.get_neighbors_features(scene, id, timestep)
@@ -96,11 +96,13 @@ class InferenceModel:
             if neighbor_data is not None:
                 features_normalized = [
                     neighbor_data['r']/self.config['radius_normalizing_factor'], neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed']/self.config['speed_normalizing_factor'],
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    self.config['veh_length']/self.config['radius_normalizing_factor'], self.config['veh_width']/self.config['radius_normalizing_factor']
                 ]
                 features = [
                     neighbor_data['r'], neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed'],
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    self.config['veh_length'], self.config['veh_width']
                 ]
             else:
                 # Zero padding for missing neighbor data

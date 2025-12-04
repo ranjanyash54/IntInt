@@ -67,11 +67,13 @@ class TrafficDataset(Dataset):
                 self._get_polar_features(scene, entity_data)
                 features_normalized = [
                     entity_data['r']/self.radius_normalizing_factor, entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed']/self.speed_normalizing_factor,
-                    entity_data['tangent_sin'], entity_data['tangent_cos']
+                    entity_data['tangent_sin'], entity_data['tangent_cos'],
+                    self.config['veh_length']/self.radius_normalizing_factor, self.config['veh_width']/self.radius_normalizing_factor
                 ]
                 features = [
                     entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
-                    entity_data['tangent_sin'], entity_data['tangent_cos']
+                    entity_data['tangent_sin'], entity_data['tangent_cos'],
+                    self.config['veh_length'], self.config['veh_width']
                 ]
             input_sequence.append(features)
             input_sequence_normalized.append(features_normalized)
@@ -103,11 +105,13 @@ class TrafficDataset(Dataset):
                 self._get_polar_features(scene, entity_data)
                 features_normalized = [
                     entity_data['r']/self.radius_normalizing_factor, entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed']/self.speed_normalizing_factor,
-                    entity_data['tangent_sin'], entity_data['tangent_cos']
+                    entity_data['tangent_sin'], entity_data['tangent_cos'],
+                    self.config['veh_length']/self.radius_normalizing_factor, self.config['veh_width']/self.radius_normalizing_factor
                 ]
                 features = [
                     entity_data['r'], entity_data['sin_theta'], entity_data['cos_theta'], entity_data['speed'],
-                    entity_data['tangent_sin'], entity_data['tangent_cos']
+                    entity_data['tangent_sin'], entity_data['tangent_cos'],
+                    self.config['veh_length'], self.config['veh_width']
                 ]
             target_sequence.append(features)
             target_sequence_normalized.append(features_normalized)
@@ -227,11 +231,13 @@ class TrafficDataset(Dataset):
                 self._get_polar_features(scene, neighbor_data)
                 features_normalized = [
                     neighbor_data['r']/self.radius_normalizing_factor, neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed']/self.speed_normalizing_factor,
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    self.config['veh_length']/self.radius_normalizing_factor, self.config['veh_width']/self.radius_normalizing_factor
                 ]
                 features = [
                     neighbor_data['r'], neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed'],
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    self.config['veh_length'], self.config['veh_width']
                 ]
             else:
                 # Zero padding for missing neighbor data
