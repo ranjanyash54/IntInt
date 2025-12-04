@@ -23,7 +23,7 @@ from data_loader import create_dataloaders
 from model import TrafficPredictor
 from environment import Environment
 from argument_parser import parse_training_args
-from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss, CosineSimilarityLoss
+from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss, CosineSimilarityLoss, CorrelatedGaussianNLLLoss
 
 # Set up logging
 logging.basicConfig(
@@ -121,8 +121,8 @@ if __name__ == "__main__":
     # Loss function and optimizers
     output_distribution_type = config.get('output_distribution_type', 'linear')
     if output_distribution_type == 'gaussian':
-        criterion = GaussianNLLLoss(config)
-        logger.info("Using GaussianNLLLoss for Gaussian output predictions")
+        criterion = CorrelatedGaussianNLLLoss(config)
+        logger.info("Using CorrelatedGaussianNLLLoss for Gaussian output predictions")
     elif output_distribution_type == 'cosine':
         criterion = CosineSimilarityLoss(config)
         logger.info("Using CosineSimilarityLoss for cosine similarity predictions")

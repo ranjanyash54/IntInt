@@ -137,64 +137,73 @@ class GaussianNLLLoss(nn.Module):
         nll = 0.5 * (quad + logdet + 2 * math.log(2 * math.pi))
         return nll.mean()
 
-# class GaussianNLLLoss(nn.Module):
-#     """Gaussian Negative Log-Likelihood loss for delta x and delta y predictions."""
-    
-#     def __init__(self, config: dict, eps: float = 1e-6):
-#         super().__init__()
-#         self.dt = config['dt']
-#         self.eps = eps
-    
-#     def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-#         """
-#         Compute Gaussian NLL loss for delta x and delta y.
-        
-#         Args:
-#             predictions: [batch_size, prediction_horizon, 5] - [mu_x, mu_y, a, b, c]
-#             targets: [batch_size, prediction_horizon, 6] - [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
-        
-#         Returns:
-#             Loss value
-#         """
-#         predictions = predictions.squeeze(-2)
-#         batch_size, prediction_horizon, _ = predictions.shape
-#         # Extract Gaussian parameters
+class CorrelatedGaussianNLLLoss(nn.Module):
+    def __init__(self, config: dict, eps: float = 1e-6):
+        super().__init__()
+        self.dt = config["dt"]
+        self.eps = eps
 
-#         mean = predictions[:, :, :2]
-#         a, b, c = predictions[:, :, 2], predictions[:, :, 3], predictions[:, :, 4]
-#         l11 = F.softplus(a) + self.eps              # positive
-#         l21 = b                                # free
-#         l22 = F.softplus(c) + self.eps              # positive
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        preds:   [B, T, 5] -> [mu_x, mu_y, log_sigma_x, log_sigma_y, rho_raw]
+        targets: [B, T, 6] -> as in your code: [x, y, heading, speed, tan_sin, tan_cos] or similar
+        """
 
-#         # build lower-triangular L: shape (B,2,2)
-#         L = torch.zeros(batch_size, prediction_horizon, 2, 2, device=predictions.device, dtype=predictions.dtype)
-#         L[..., 0, 0] = l11
-#         L[..., 1, 0] = l21
-#         L[..., 1, 1] = l22
+        # handle the extra singleton dim if it appears
+        if preds.dim() == 4 and preds.size(-2) == 1:
+            preds = preds.squeeze(-2)  # [B, T, 5]
 
-#         # Compute actual deltas from targets: delta = speed * tangent
-#         # targets: [r, sin_theta, cos_theta, speed, tangent_sin, tangent_cos]
-#         speed = targets[:, :, 3]  # [batch_size, prediction_horizon]
-#         tangent_sin = targets[:, :, 4]  # [batch_size, prediction_horizon]
-#         tangent_cos = targets[:, :, 5]  # [batch_size, prediction_horizon]
-        
-#         actual_dx = speed * tangent_cos * self.dt  # [batch_size, prediction_horizon]
-#         actual_dy = speed * tangent_sin * self.dt  # [batch_size, prediction_horizon]
+        # means
+        mu = preds[..., 0:2]           # [B, T, 2]
 
-#         actual_delta = torch.stack([actual_dx, actual_dy], dim=-1)  # [batch_size, prediction_horizon, 2]
+        # log standard deviations
+        log_sigma = preds[..., 2:4]    # [B, T, 2]
+        # clamp std range to something reasonable (≈ [0.01, 20])
+        log_sigma = torch.clamp(log_sigma, min=-5.0, max=3.0)
+        sigma = torch.exp(log_sigma)   # [B, T, 2]
+        sigma_x = sigma[..., 0]
+        sigma_y = sigma[..., 1]
 
-#         diff = (actual_delta - mean)[..., None]  # [batch_size, prediction_horizon, 2, 1]
-#         z = torch.linalg.solve_triangular(L, diff, upper=False)  # (B,T,2,1)
-#         # Quadratic term: ||z||^2
-#         quad = torch.sum(z.squeeze(-1)**2, dim=-1)               # (B,T)
+        # raw correlation -> rho in (-1, 1)
+        rho_raw = preds[..., 4]        # [B, T]
+        rho = torch.tanh(rho_raw)
+        # extra clamp for numerical safety near ±1
+        rho = torch.clamp(rho, -0.999, 0.999)
 
-#         # log|Σ| = 2 * (log l11 + log l22)
-#         diag = torch.diagonal(L, dim1=-2, dim2=-1)               # (B,T,2)
-#         logdet = 2 * torch.sum(torch.log(diag + self.eps), dim=-1)    # (B,T)
+        # build true deltas (same as your original code)
+        speed   = targets[..., 3]
+        tan_sin = targets[..., 4]
+        tan_cos = targets[..., 5]
 
-#         nll = 0.5 * (quad + logdet + 2 * math.log(2 * math.pi))  # (B,T)
+        dx = speed * tan_cos * self.dt
+        dy = speed * tan_sin * self.dt
+        delta = torch.stack([dx, dy], dim=-1)  # [B, T, 2]
 
-#         return nll.mean()
+        # standardized differences
+        diff = delta - mu            # [B, T, 2]
+        zx = diff[..., 0] / (sigma_x + self.eps)  # [B, T]
+        zy = diff[..., 1] / (sigma_y + self.eps)  # [B, T]
+
+        # quadratic form for correlated bivariate Gaussian:
+        # Q = (zx^2 + zy^2 - 2 * rho * zx * zy) / (1 - rho^2)
+        one_minus_rho2 = 1.0 - rho * rho
+        one_minus_rho2 = one_minus_rho2.clamp_min(self.eps)   # avoid divide-by-zero
+        quad = (zx * zx + zy * zy - 2.0 * rho * zx * zy) / one_minus_rho2  # [B, T]
+
+        # log determinant |Σ| for covariance:
+        # Σ = [[σx^2, ρ σx σy],
+        #      [ρ σx σy, σy^2]]
+        # |Σ| = σx^2 σy^2 (1 - ρ^2)
+        # log|Σ| = 2 log σx + 2 log σy + log(1 - ρ^2)
+        logdet_diag = 2.0 * log_sigma.sum(dim=-1)             # 2 log σx + 2 log σy
+        log_one_minus_rho2 = torch.log(one_minus_rho2)        # log(1 - ρ^2)
+        logdet = logdet_diag + log_one_minus_rho2             # [B, T]
+
+        # NLL = 0.5 * (Q + log((2π)^2 |Σ|))
+        #     = 0.5 * (Q + log|Σ| + 2 log(2π))
+        nll = 0.5 * (quad + logdet + 2.0 * math.log(2.0 * math.pi))
+
+        return nll.mean()
 
 
 class TrajectoryMetrics:

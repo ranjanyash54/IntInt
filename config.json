@@ -41,7 +41,7 @@
 
     "output_type": "cartesian",
     "output_distribution_type": "gaussian",
-    "actor_decoder_output_size": 4,
+    "actor_decoder_output_size": 5,
 
 
     "batch_size": 256,

@@ -250,6 +250,61 @@ class InferenceServer:
         angle = np.arctan2(next_y - current_position[1], next_x - current_position[0])
         return next_x, next_y, angle
 
+
+    def calculate_next_position_correlated_gaussian(self, data, prediction, sample=False, eps=1e-6):
+        """
+        prediction: [mu_x, mu_y, log_sigma_x, log_sigma_y, rho_raw]
+        data: dict with keys 'x', 'y'
+        sample:
+            False -> use mean (deterministic)
+            True  -> sample from full correlated Gaussian
+        """
+        current_position = (data['x'], data['y'])
+
+        mean_dx      = prediction[0]
+        mean_dy      = prediction[1]
+        log_std_dx   = prediction[2]
+        log_std_dy   = prediction[3]
+        rho_raw      = prediction[4]
+
+        # same clamping as in training (roughly [0.01, 20])
+        log_std_dx = np.clip(log_std_dx, -5.0, 3.0)
+        log_std_dy = np.clip(log_std_dy, -5.0, 3.0)
+
+        std_dx = np.exp(log_std_dx)
+        std_dy = np.exp(log_std_dy)
+
+        # raw -> rho in (-1, 1)
+        rho = np.tanh(rho_raw)
+        rho = np.clip(rho, -0.999, 0.999)  # extra safety
+
+        if sample:
+            # build covariance matrix:
+            # Σ = [[σx^2, ρ σx σy],
+            #      [ρ σx σy, σy^2]]
+            var_x = std_dx ** 2
+            var_y = std_dy ** 2
+            cov_xy = rho * std_dx * std_dy
+
+            cov = np.array([[var_x,  cov_xy],
+                            [cov_xy, var_y]], dtype=np.float64)
+
+            dx, dy = np.random.multivariate_normal(
+                mean=[mean_dx, mean_dy],
+                cov=cov
+            )
+        else:
+            # deterministic: same behavior as your old function (use the mean)
+            dx, dy = mean_dx, mean_dy
+
+        next_x = current_position[0] + dx
+        next_y = current_position[1] + dy
+
+        angle = np.arctan2(next_y - current_position[1],
+                        next_x - current_position[0])
+
+        return next_x, next_y, angle
+
     def process_prediction(self, current_position: torch.Tensor, prediction: torch.Tensor) -> Tuple[float, float]:
         pred_cartesian = self.trajectory_metrics.calculate_eval_cartesian(current_position, prediction)
         result = pred_cartesian.squeeze(0).squeeze(0).tolist()
@@ -280,7 +335,7 @@ class InferenceServer:
             if self.output_distribution_type == 'linear':
                 next_x, next_y, angle = self.calculate_next_position_linear(data, prediction)
             elif self.output_distribution_type == 'gaussian':
-                next_x, next_y, angle = self.calculate_next_position_gaussian(data, prediction)
+                next_x, next_y, angle = self.calculate_next_position_correlated_gaussian(data, prediction, sample=True)
             
             if not check_boundary((next_x, next_y)):
                 continue
