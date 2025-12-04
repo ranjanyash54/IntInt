@@ -52,8 +52,6 @@
     "warmup_steps": 4000,
     "num_epochs": 100,
     "d_model": 128,
-    "num_spatial_heads": 8,
-    "num_layers": 4,
     "dropout": 0.1,
     "sequence_length": 20,
     "prediction_horizon": 20,

@@ -28,8 +28,6 @@ class TrafficPredictionModel(nn.Module):
         
         # Model configuration
         self.d_model = config.get('d_model', 128)
-        self.num_spatial_heads = config.get('num_spatial_heads', 8)
-        self.num_layers = config.get('num_layers', 4)
         self.dropout = config.get('dropout', 0.1)
         self.sequence_length = config.get('sequence_length', 10)
         self.prediction_horizon = config.get('prediction_horizon', 5)
@@ -77,8 +75,6 @@ class TrafficPredictionModel(nn.Module):
         
         logger.info(f"Created TrafficPredictionModel with:")
         logger.info(f"  d_model: {self.d_model}")
-        logger.info(f"  num_spatial_heads: {self.num_spatial_heads}")
-        logger.info(f"  num_layers: {self.num_layers}")
         logger.info(f"  sequence_length: {self.sequence_length}")
         logger.info(f"  prediction_horizon: {self.prediction_horizon}")
         logger.info(f"  output_distribution_type: {self.output_distribution_type}")

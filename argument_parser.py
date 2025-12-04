@@ -60,12 +60,6 @@ def create_parser():
     parser.add_argument(
         "--validate_every", type=int, default=1, help="Run validation every N epochs"
     )
-    parser.add_argument(
-        "--train_metrics_every",
-        type=int,
-        default=100,
-        help="Calculate training metrics every N batches (0 to disable)",
-    )
 
     # Logging arguments
     parser.add_argument(

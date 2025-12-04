@@ -177,10 +177,6 @@ if __name__ == "__main__":
     
     logger.info("Starting training...")
     logger.info(f"Validation will run every {args.validate_every} epochs")
-    if args.train_metrics_every > 0:
-        logger.info(f"Training metrics (ADE/FDE) will be calculated every {args.train_metrics_every} batches")
-    else:
-        logger.info("Training metrics (ADE/FDE) calculation disabled for speed")
     start_time = time.time()
     
     # Initialize global step counter for wandb batch logging
