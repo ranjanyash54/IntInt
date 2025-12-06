@@ -197,6 +197,10 @@ class InferenceServer:
             speed = np.sqrt(node_df['vx'].iloc[-1]**2 + node_df['vy'].iloc[-1]**2)
             tangent_sin = np.sin(theta)
             tangent_cos = np.cos(theta)
+
+            back_x = node_values[0] - self.config['veh_length'] * tangent_cos
+            back_y = node_values[1] - self.config['veh_length'] * tangent_sin
+            back_r, back_sin_theta, back_cos_theta = scene.convert_rectangular_to_polar((back_x, back_y))
             scene.entity_data[(id, self.timestep)] = {
                 'x': node_values[0],
                 'y': node_values[1],
@@ -211,7 +215,10 @@ class InferenceServer:
                 'signal': signal,
                 'cluster': cluster,
                 'node_type': node_type,
-                'theta': theta
+                'theta': theta,
+                'back_r': back_r,
+                'back_sin_theta': back_sin_theta,
+                'back_cos_theta': back_cos_theta
             }
             samples.append((id, self.timestep))
 

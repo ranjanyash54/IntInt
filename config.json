@@ -5,7 +5,7 @@
     "actor_encoder_input_size": 6,
     "actor_encoder_output_size": 128,
     "max_nbr": 10,
-    "neighbor_encoder_input_size": 6,
+    "neighbor_encoder_input_size": 9,
     "neighbor_encoder_output_size": 128,
     "neighbor_threshold": 50.0,
 
@@ -61,5 +61,8 @@
     "device": "cuda",
     "save_dir": "models",
     "log_dir": "logs",
-    "num_workers": 4
+    "num_workers": 4,
+
+    "veh_length": 5.0,
+    "veh_width": 1.8
 } 

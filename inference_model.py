@@ -96,11 +96,13 @@ class InferenceModel:
             if neighbor_data is not None:
                 features_normalized = [
                     neighbor_data['r']/self.config['radius_normalizing_factor'], neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed']/self.config['speed_normalizing_factor'],
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    neighbor_data['back_r']/self.config['radius_normalizing_factor'], neighbor_data['back_sin_theta'], neighbor_data['back_cos_theta']
                 ]
                 features = [
                     neighbor_data['r'], neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed'],
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    neighbor_data['back_r'], neighbor_data['back_sin_theta'], neighbor_data['back_cos_theta']
                 ]
             else:
                 # Zero padding for missing neighbor data

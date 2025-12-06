@@ -153,6 +153,36 @@ class TrafficDataset(Dataset):
         entity_data['tangent_sin'] = tangent_sin
         entity_data['tangent_cos'] = tangent_cos
 
+    def _get_neighbor_polar_features(self, scene, entity_data: dict):
+        """Get polar features for the given entity data."""
+
+        x, y = entity_data['x'], entity_data['y']
+
+        r, sin_theta, cos_theta = scene.convert_rectangular_to_polar((x, y))
+        speed = np.sqrt(entity_data['vx']**2 + entity_data['vy']**2)
+        head = entity_data['theta']
+        tangent_sin = np.sin(head)
+        tangent_cos = np.cos(head)
+
+        veh_length = self.config['veh_length']
+        veh_width = self.config['veh_width']
+
+        back_x = x - veh_length * tangent_cos
+        back_y = y - veh_length * tangent_sin
+
+        back_r, back_sin_theta, back_cos_theta = scene.convert_rectangular_to_polar((back_x, back_y))
+
+
+        entity_data['r'] = r
+        entity_data['sin_theta'] = sin_theta
+        entity_data['cos_theta'] = cos_theta
+        entity_data['back_r'] = back_r
+        entity_data['back_sin_theta'] = back_sin_theta
+        entity_data['back_cos_theta'] = back_cos_theta
+        entity_data['speed'] = speed
+        entity_data['tangent_sin'] = tangent_sin
+        entity_data['tangent_cos'] = tangent_cos
+
 
     def _get_polyline_features(self, scene, object_id: int, time: int):
         """Get features for the polyline of the given object at the specified time."""
@@ -224,14 +254,16 @@ class TrafficDataset(Dataset):
         for neighbor_id, distance in neighbors:
             neighbor_data = scene.get_entity_data(time, neighbor_id)
             if neighbor_data is not None:
-                self._get_polar_features(scene, neighbor_data)
+                self._get_neighbor_polar_features(scene, neighbor_data)
                 features_normalized = [
                     neighbor_data['r']/self.radius_normalizing_factor, neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed']/self.speed_normalizing_factor,
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    neighbor_data['back_r']/self.radius_normalizing_factor, neighbor_data['back_sin_theta'], neighbor_data['back_cos_theta']
                 ]
                 features = [
                     neighbor_data['r'], neighbor_data['sin_theta'], neighbor_data['cos_theta'], neighbor_data['speed'],
-                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos']
+                    neighbor_data['tangent_sin'], neighbor_data['tangent_cos'],
+                    neighbor_data['back_r'], neighbor_data['back_sin_theta'], neighbor_data['back_cos_theta']
                 ]
             else:
                 # Zero padding for missing neighbor data
