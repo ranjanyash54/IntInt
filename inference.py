@@ -237,17 +237,24 @@ class InferenceServer:
         angle = np.arctan2(delta_y.detach().numpy(), delta_x.detach().numpy())
         return next_x, next_y, angle
     
-    def calculate_next_position_gaussian(self, data, prediction):
-        current_position = (data['x'], data['y'])
+    def calculate_next_position_gaussian(self, data_signal, prediction):
+        data, signal_list = data_signal
+        current_position = (data['x'], data['y'], data['theta'])
         mean_dx = prediction[0]
         mean_dy = prediction[1]
-        log_std_dx = prediction[2]
-        log_std_dy = prediction[3]
-        std_dx = np.exp(log_std_dx)
-        std_dy = np.exp(log_std_dy)
+
         next_x = current_position[0] + mean_dx
         next_y = current_position[1] + mean_dy
         angle = np.arctan2(next_y - current_position[1], next_x - current_position[0])
+
+        signal = signal_list[0][1] if len(signal_list) > 0 else 3
+        delta_dist = np.sqrt(mean_dx**2 + mean_dy**2)
+        speed = delta_dist / self.config['dt']
+        if (signal == 0 or signal == 1) and speed < 1.0:
+            angle = current_position[2]
+            next_x = current_position[0]
+            next_y = current_position[1]
+
         return next_x, next_y, angle
 
     def process_prediction(self, current_position: torch.Tensor, prediction: torch.Tensor) -> Tuple[float, float]:
@@ -277,10 +284,11 @@ class InferenceServer:
             prediction = prediction.squeeze(0).squeeze(0)
             prediction = prediction.detach().numpy()
             data = scene.get_entity_data(self.timestep, node_id)
+            signal = scene.get_signal_neighbors(timestep=0, entity_id=node_id)
             if self.output_distribution_type == 'linear':
                 next_x, next_y, angle = self.calculate_next_position_linear(data, prediction)
             elif self.output_distribution_type == 'gaussian':
-                next_x, next_y, angle = self.calculate_next_position_gaussian(data, prediction)
+                next_x, next_y, angle = self.calculate_next_position_gaussian((data, signal), prediction)
             
             if not check_boundary((next_x, next_y)):
                 continue
