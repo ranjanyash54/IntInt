@@ -300,13 +300,13 @@ class InferenceServer:
             if not check_boundary((next_x, next_y)):
                 continue
 
-            node_next_ccs, _ = convert_to_CCS_coord([(next_x, next_y)], centroid_spl[data['cluster']])
-            node_next_ccs[0][1] = 0
-            node_next_ccs = node_next_ccs[0]
-            x_spl, y_spl = centroid_spl[data['cluster']]
-            xds, yds = x_spl.derivative(), y_spl.derivative()
-            dx, dy = xds(node_next_ccs[0]), yds(node_next_ccs[0])
-            angle = np.arctan2(dy, dx)
+            # node_next_ccs, _ = convert_to_CCS_coord([(next_x, next_y)], centroid_spl[data['cluster']])
+            # node_next_ccs[0][1] = 0
+            # node_next_ccs = node_next_ccs[0]
+            # x_spl, y_spl = centroid_spl[data['cluster']]
+            # xds, yds = x_spl.derivative(), y_spl.derivative()
+            # dx, dy = xds(node_next_ccs[0]), yds(node_next_ccs[0])
+            # angle = np.arctan2(dy, dx)
             
             output_json[timestep_str][int(node_id)] = {'coord': [next_x.tolist(), next_y.tolist()], 'angle': [angle.tolist()]}
         

@@ -71,11 +71,11 @@ if __name__ == "__main__":
     input_data_folder = 'sumo_12hrs_heading_signal_cluster_region'
     input_data_path = os.path.join(input_data_root, input_data_folder)
 
-    data_cols = ['frame_id', 'track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster', 'signal', 'direction_id', 'maneuver_id', 'region']
+    data_cols = ['frame_id', 'track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster', 'direction_id', 'maneuver_id']
     signal_cols = ['frame_id', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 
     out_data_dir = './data/raw/'
-    out_data_cols = ['frame_id','track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster', 'signal', 'direction_id', 'maneuver_id', 'region']
+    out_data_cols = ['frame_id','track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster', 'direction_id', 'maneuver_id']
 
     out_signal_dir = './data/signal/'
     out_signal_cols = ['frame_id', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']

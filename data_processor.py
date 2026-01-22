@@ -112,7 +112,7 @@ class TrafficDataProcessor:
 
 
             # Process the trajectory data
-            columns = ['time', 'id', 'x', 'y', 'theta', 'vehicle_type', 'cluster', 'signal', 'direction_id', 'maneuver_id', 'region']
+            columns = ['time', 'id', 'x', 'y', 'theta', 'vehicle_type', 'cluster', 'direction_id', 'maneuver_id']
             data = pd.read_csv(data_file_path, sep='\t', header=None, names=columns)
             
             data['time'] = data['time'].astype(int)
@@ -123,9 +123,8 @@ class TrafficDataProcessor:
             data['theta'] = data['theta'].astype(float)
             data['vehicle_type'] = data['vehicle_type'].astype(int)
             data['cluster'] = data['cluster'].astype(int)
-            data['signal'] = data['signal'].astype(int)
 
-            data.drop(columns=['direction_id', 'maneuver_id', 'region'], inplace=True)
+            data.drop(columns=['direction_id', 'maneuver_id'], inplace=True)
 
             id_to_drop = []
             for id, entity_df in data.groupby('id'):
@@ -144,7 +143,6 @@ class TrafficDataProcessor:
                     theta = row['theta']
                     vehicle_type = row['vehicle_type']
                     cluster = row['cluster']
-                    signal = row['signal']
                     vx = row['vx']
                     vy = row['vy']
                     scene.entity_data[(id, time)] = {
@@ -153,7 +151,6 @@ class TrafficDataProcessor:
                         'theta': theta,
                         'vehicle_type': vehicle_type,
                         'cluster': cluster,
-                        'signal': signal,
                         'vx': vx,
                         'vy': vy}
 
