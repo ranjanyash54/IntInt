@@ -11,6 +11,7 @@ from argument_parser import parse_data_processor_args
 import json
 import pickle
 from joblib import dump
+import joblib
 import time
 
 # Set up logging
@@ -38,7 +39,7 @@ class TrafficDataProcessor:
         self.signal_folder = Path(self.data_root) / "signal"
         self.signal_train_folder = self.signal_folder / "train"
         self.signal_validation_folder = self.signal_folder / "val"
-        self.map_folder = Path(self.data_root) / "map_info"
+        self.map_folder = Path(self.data_root) / "map_info_real"
 
     def _load_map_info(self):
         """Load map information from the file."""
@@ -47,12 +48,10 @@ class TrafficDataProcessor:
             return
 
         cluster_polylines_info_path = self.map_folder / "cluster_polylines_dict.pickle"
-        with open(cluster_polylines_info_path, 'rb') as f:
-            cluster_polylines_dict = pickle.load(f)
+        cluster_polylines_dict = joblib.load(cluster_polylines_info_path)
 
         lane_end_coords_info_path = self.map_folder / "lane_end_coords_dict.pickle"
-        with open(lane_end_coords_info_path, 'rb') as f:
-            lane_end_coords_dict = pickle.load(f)
+        lane_end_coords_dict = joblib.load(lane_end_coords_info_path)
         
         return cluster_polylines_dict, lane_end_coords_dict
 
@@ -104,7 +103,7 @@ class TrafficDataProcessor:
 
             # Process the signal data
             signal_file_path = signal_files_dict.get(filename)
-            signal_columns = ['time', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+            signal_columns = ['time', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']
             signal_data = pd.read_csv(signal_file_path, sep='\t', header=None, names=signal_columns)
             signal_data['time'] = signal_data['time'].astype(int)
             signal_data['time'] -= signal_data['time'].min()
@@ -112,7 +111,7 @@ class TrafficDataProcessor:
 
 
             # Process the trajectory data
-            columns = ['time', 'id', 'x', 'y', 'theta', 'vehicle_type', 'cluster', 'direction_id', 'maneuver_id']
+            columns = ['time', 'id', 'x', 'y', 'theta', 'vehicle_type', 'cluster']
             data = pd.read_csv(data_file_path, sep='\t', header=None, names=columns)
             
             data['time'] = data['time'].astype(int)
@@ -123,8 +122,6 @@ class TrafficDataProcessor:
             data['theta'] = data['theta'].astype(float)
             data['vehicle_type'] = data['vehicle_type'].astype(int)
             data['cluster'] = data['cluster'].astype(int)
-
-            data.drop(columns=['direction_id', 'maneuver_id'], inplace=True)
 
             id_to_drop = []
             for id, entity_df in data.groupby('id'):
@@ -203,13 +200,13 @@ if __name__ == "__main__":
 
     # Dump train environment
     if train_env and len(train_env) > 0:
-        train_output_path = output_dir / "train_environment_6hrs.pkl"
+        train_output_path = output_dir / "train_environment_real_10mins.pkl"
         dump(train_env, train_output_path)
         print(f"✓ Train environment saved to: {train_output_path}")
 
     # Dump validation environment
     if validation_env and len(validation_env) > 0:
-        validation_output_path = output_dir / "val_environment_6hrs.pkl"
+        validation_output_path = output_dir / "val_environment_real_10mins.pkl"
         dump(validation_env, validation_output_path)
         print(f"✓ Validation environment saved to: {validation_output_path}")
 

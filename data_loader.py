@@ -128,8 +128,12 @@ class TrafficDataset(Dataset):
         neighbor_tensor = torch.tensor(np.array(neighbor_sequence), dtype=torch.float32)
         target_neighbor_tensor = torch.tensor(np.array(target_neighbor_sequence), dtype=torch.float32)
 
-        polyline_tensor = torch.tensor(np.array(polyline_sequence), dtype=torch.float32)
-        target_polyline_tensor = torch.tensor(np.array(target_polyline_sequence), dtype=torch.float32)
+        
+        try:
+            polyline_tensor = torch.tensor(np.array(polyline_sequence), dtype=torch.float32)
+            target_polyline_tensor = torch.tensor(np.array(target_polyline_sequence), dtype=torch.float32)
+        except Exception as e:
+            import pdb; pdb.set_trace()
 
         signal_tensor = torch.tensor(np.array(signal_sequence), dtype=torch.float32)
         target_signal_tensor = torch.tensor(np.array(target_signal_sequence), dtype=torch.float32)
@@ -289,7 +293,9 @@ def create_data_lists(environment: Environment) -> list[tuple[int, int, int]]:
         # Get all unique objects and times
         scene_data = scene.entity_data
         
-        for object_id, time in scene_data.keys():
+        for (object_id, time), data in scene_data.items():
+            if data['cluster'] == -1:
+                continue
             samples.append((scene.scene_id, object_id, time))
             
     logger.info(f"Created {len(samples)} samples")

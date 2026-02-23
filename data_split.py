@@ -3,8 +3,8 @@ import os
 import numpy as np
 from tqdm import tqdm
 
-TRAIN_TEST_SPLIT = 0.9
-SCENE_LENGTH = 3000
+TRAIN_TEST_SPLIT = 0.8
+SCENE_LENGTH = 2000
 
 def split_to_scenes(data, out_dir, cols):
     train_fid_start = int(data.frame_id.min())
@@ -36,14 +36,11 @@ def split_signals(signals, out_dir, cols):
     for start_fid in tqdm(range(train_fid_start, train_fid_end - SCENE_LENGTH, SCENE_LENGTH)):
         fragment_df = signals[(signals.frame_id >= start_fid) & (signals.frame_id < start_fid + SCENE_LENGTH)].copy()
         if fragment_df.frame_id.max() - fragment_df.frame_id.min() < 600: break
-        # process_ccs(fragment_df, centroid_dict)
         np.savetxt(os.path.join(out_dir, 'train', f'{str(start_fid).zfill(6)}.txt'), fragment_df[cols].values, fmt='%f', delimiter='\t')
-    
-    
+
     for start_fid in tqdm(range(train_fid_end, signals.frame_id.max(), SCENE_LENGTH)):
         fragment_df = signals[(signals.frame_id >= start_fid) & (signals.frame_id < start_fid + SCENE_LENGTH)].copy()
         if fragment_df.frame_id.max() - fragment_df.frame_id.min() < 600: break
-        # process_ccs(fragment_df, centroid_dict)
         np.savetxt(os.path.join(out_dir, 'val', f'{str(start_fid).zfill(6)}.txt'), fragment_df[cols].values, fmt='%f', delimiter='\t')
 
 
@@ -68,32 +65,27 @@ def clean_directory(out_data_dir: str, out_signal_dir: str):
 
 if __name__ == "__main__":
     input_data_root = './datasets/'
-    input_data_folder = 'sumo_12hrs_heading_signal_cluster_region'
+    input_data_folder = 'real_10mins'
     input_data_path = os.path.join(input_data_root, input_data_folder)
 
-    data_cols = ['frame_id', 'track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster', 'direction_id', 'maneuver_id']
-    signal_cols = ['frame_id', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
-
     out_data_dir = './data/raw/'
-    out_data_cols = ['frame_id','track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster', 'direction_id', 'maneuver_id']
+    out_data_cols = ['frame_id','track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster']
 
     out_signal_dir = './data/signal/'
-    out_signal_cols = ['frame_id', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+    out_signal_cols = ['frame_id', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']
+
 
     if not os.path.exists(input_data_path):
         raise FileNotFoundError(f"Input data path does not exist: {input_data_path}")
 
     clean_directory(out_data_dir, out_signal_dir)
-
     ## Loads the data and converts into scenes of 3000 frames
     for subdir, dirs, files in os.walk(input_data_path):
         for file in files:
             full_data_path = os.path.join(subdir, file)
             print('At', full_data_path)
-            data = pd.read_csv(full_data_path, sep='\t', index_col=False, header=None)
+            data = pd.read_csv(full_data_path, sep='\t')
             if 'signal' in file:
-                data.columns = signal_cols
                 split_signals(data, out_signal_dir, out_signal_cols)
             elif file.endswith('.txt'):
-                data.columns = data_cols
                 split_to_scenes(data, out_data_dir, out_data_cols)
