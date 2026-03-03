@@ -200,13 +200,13 @@ if __name__ == "__main__":
 
     # Dump train environment
     if train_env and len(train_env) > 0:
-        train_output_path = output_dir / "train_environment_real_10mins.pkl"
+        train_output_path = output_dir / "train_environment_real_30mins.pkl"
         dump(train_env, train_output_path)
         print(f"✓ Train environment saved to: {train_output_path}")
 
     # Dump validation environment
     if validation_env and len(validation_env) > 0:
-        validation_output_path = output_dir / "val_environment_real_10mins.pkl"
+        validation_output_path = output_dir / "val_environment_real_30mins.pkl"
         dump(validation_env, validation_output_path)
         print(f"✓ Validation environment saved to: {validation_output_path}")
 

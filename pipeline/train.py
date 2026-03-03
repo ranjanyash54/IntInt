@@ -4,14 +4,10 @@ Training script for traffic prediction model.
 """
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 import numpy as np
 import logging
-import os
 from pathlib import Path
-from typing import Dict, List, Tuple
 import json
 import time
 from datetime import datetime
@@ -21,7 +17,6 @@ import wandb
 
 from data_loader import create_dataloaders
 from model import TrafficPredictor
-from environment import Environment
 from argument_parser import parse_training_args
 from metrics import TrajectoryMetrics, MSELoss, GaussianNLLLoss, CosineSimilarityLoss
 

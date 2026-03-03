@@ -1,10 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Dict, List, Tuple, Optional
 import logging
-import math
-from environment import Environment
 from attention import NeighborAttentionLayer, TemporalAttentionLayer
 logger = logging.getLogger(__name__)
 
