@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
-from environment import Environment
+from data_structures.environment import Environment
 import numpy as np
 import logging
 

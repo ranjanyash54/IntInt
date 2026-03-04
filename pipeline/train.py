@@ -14,7 +14,9 @@ from datetime import datetime
 from tqdm import tqdm
 import joblib
 import wandb
-
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from data_loader import create_dataloaders
 from model import TrafficPredictor
 from argument_parser import parse_training_args

@@ -20,18 +20,18 @@ def create_parser():
 
     # Data arguments
     parser.add_argument(
-        "--config", type=str, default="config.json", help="Path to configuration file"
+        "--config", type=str, default="../config/config.json", help="Path to configuration file"
     )
     parser.add_argument(
         "--train_data",
         type=str,
-        default="output/train_environment.pkl",
+        default="../data/processed/train_environment.pkl",
         help="Path to training data directory",
     )
     parser.add_argument(
         "--val_data",
         type=str,
-        default="output/val_environment.pkl",
+        default="../data/processed/val_environment.pkl",
         help="Path to validation data directory",
     )
 
@@ -72,7 +72,7 @@ def create_parser():
     parser.add_argument(
         "--save_dir",
         type=str,
-        default=None,
+        default="../models",
         help="Directory to save models (overrides config)",
     )
     parser.add_argument(
@@ -178,13 +178,13 @@ def create_data_processor_parser():
     )
 
     parser.add_argument(
-        "--data_root", type=str, default="data", help="Root directory for data"
+        "--data_root", type=str, default="./", help="Root directory for data"
     )
     parser.add_argument(
-        "--output_dir", type=str, default="output", help="Output directory for data"
+        "--output_dir", type=str, default="../processed", help="Output directory for data"
     )
     parser.add_argument(
-        "--config", type=str, default="config.json", help="Path to configuration file"
+        "--config", type=str, default="../../config/config.json", help="Path to configuration file"
     )
     return parser
 

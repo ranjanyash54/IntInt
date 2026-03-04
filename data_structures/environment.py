@@ -1,5 +1,5 @@
 from pathlib import Path
-from scene import Scene
+from .scene import Scene
 
 class Environment:
     """

@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 import numpy as np
+import joblib
 from tqdm import tqdm
 
 TRAIN_TEST_SPLIT = 0.8
@@ -20,7 +21,7 @@ def split_to_scenes(data, out_dir, cols):
         np.savetxt(os.path.join(out_dir, 'train', f'{str(start_fid).zfill(6)}.txt'), fragment_df[cols].values, fmt='%f', delimiter='\t')
     
     
-    for start_fid in tqdm(range(train_fid_end, data.frame_id.max(), SCENE_LENGTH)):
+    for start_fid in tqdm(range(train_fid_end, int(data.frame_id.max()), SCENE_LENGTH)):
         fragment_df = data[(data.frame_id >= start_fid) & (data.frame_id < start_fid + SCENE_LENGTH)].copy()
         if fragment_df.frame_id.max() - fragment_df.frame_id.min() < 600: break
         # process_ccs(fragment_df, centroid_dict)
@@ -43,6 +44,10 @@ def split_signals(signals, out_dir, cols):
         if fragment_df.frame_id.max() - fragment_df.frame_id.min() < 600: break
         np.savetxt(os.path.join(out_dir, 'val', f'{str(start_fid).zfill(6)}.txt'), fragment_df[cols].values, fmt='%f', delimiter='\t')
 
+def move_maps(input_map_dir, output_map_dir):
+    for file in os.listdir(input_map_dir):
+        map_data = joblib.load(os.path.join(input_map_dir, file))
+        joblib.dump(map_data, os.path.join(output_map_dir, file))
 
 def clean_directory(out_data_dir: str, out_signal_dir: str):
     # Create output directories if they don't exist
@@ -64,14 +69,17 @@ def clean_directory(out_data_dir: str, out_signal_dir: str):
 
 
 if __name__ == "__main__":
-    input_data_root = './datasets/'
-    input_data_folder = 'real_10mins'
+    input_data_root = './nw13th_real/raw/'
+    input_data_folder = '30mins'
     input_data_path = os.path.join(input_data_root, input_data_folder)
 
-    out_data_dir = './data/raw/'
+    input_map_dir = './nw13th_real/maps/'
+    output_map_dir = '../unprocessed/maps'
+
+    out_data_dir = '../unprocessed/raw/'
     out_data_cols = ['frame_id','track_id', 'pos_x', 'pos_y', 'head', 'class', 'cluster']
 
-    out_signal_dir = './data/signal/'
+    out_signal_dir = '../unprocessed/signal/'
     out_signal_cols = ['frame_id', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']
 
 
@@ -89,3 +97,5 @@ if __name__ == "__main__":
                 split_signals(data, out_signal_dir, out_signal_cols)
             elif file.endswith('.txt'):
                 split_to_scenes(data, out_data_dir, out_data_cols)
+
+    move_maps(input_map_dir, output_map_dir)

@@ -3,13 +3,13 @@ import numpy as np
 import os
 from pathlib import Path
 import glob
-from typing import Dict, List, Tuple, Optional
 import logging
-from environment import Environment
-from scene import Scene
-from argument_parser import parse_data_processor_args
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from data_structures.environment import Environment
+from data_structures.scene import Scene
+from pipeline.argument_parser import parse_data_processor_args
 import json
-import pickle
 from joblib import dump
 import joblib
 import time
@@ -39,7 +39,7 @@ class TrafficDataProcessor:
         self.signal_folder = Path(self.data_root) / "signal"
         self.signal_train_folder = self.signal_folder / "train"
         self.signal_validation_folder = self.signal_folder / "val"
-        self.map_folder = Path(self.data_root) / "map_info_real"
+        self.map_folder = Path(self.data_root) / "maps"
 
     def _load_map_info(self):
         """Load map information from the file."""
@@ -71,7 +71,7 @@ class TrafficDataProcessor:
 
         return entity_df[['vx', 'vy']].values
     
-    def scan_data_files(self, run_type: str = "train") -> Tuple[Environment, Environment]:
+    def scan_data_files(self, run_type: str = "train") -> tuple[Environment, Environment]:
         logger.info(f"\n\nStarting to scan data files and create environments for {run_type} environment")
 
         # Create training environment
